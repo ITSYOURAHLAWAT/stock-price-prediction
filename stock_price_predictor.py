@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 
 # Shared logic lives in src/ (Phase 1 refactor). This file keeps only CLI code.
 from src.data import fetch_history
+from src.data import sanitize_ticker
 from src.indicators import calculate_technical_indicators as _calculate_indicators
 from src.features import create_features as _create_features
 from src.models import train_models as _train_models, get_feature_columns as _get_feature_columns
@@ -214,11 +215,16 @@ def main():
     print("=" * 40)
 
     # Get user input
-    ticker = input("Enter stock ticker (e.g., AAPL): ").upper()
+    raw = input("Enter stock ticker (e.g., AAPL): ")
 
-    if not ticker:
+    if not raw.strip():
         ticker = "AAPL"
         print("Using default ticker: AAPL")
+    else:
+        ticker = sanitize_ticker(raw)
+        if ticker is None:
+            print("❌ Invalid ticker. Use letters, digits, `.`, `-` or `^` (max 12 characters).")
+            return
 
     # Initialize predictor
     predictor = StockPredictor(ticker)

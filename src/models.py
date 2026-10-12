@@ -53,12 +53,16 @@ def persistence_baseline_metrics(featured_data, y_test):
     return calculate_metrics(y_test, naive_pred)
 
 
-def train_models(data, include_close_std=True):
+def train_models(data, include_close_std=True, only=None):
     """Train prediction models.
+
+    ``only`` selects a subset: ``"Random Forest"``, ``"Linear Regression"``,
+    ``"Both (Comparison)"`` or ``None`` (both). The persistence baseline is
+    always computed (it is nearly free).
 
     Returns ``(models, predictions, metrics, test_index, y_test,
     feature_cols, baseline_metrics)``. Raises ``ValueError`` when too few
-    usable rows survive feature engineering.
+    usable rows survive feature engineering or ``only`` is unknown.
     """
     # Create features
     featured_data = create_features(data, include_close_std=include_close_std)
@@ -90,23 +94,26 @@ def train_models(data, include_close_std=True):
     predictions = {}
     metrics = {}
 
-    # Linear Regression
-    lr_model = LinearRegression()
-    lr_model.fit(X_train_scaled, y_train)
-    lr_pred = lr_model.predict(X_test_scaled)
+    specs = [
+        ('Linear Regression', LinearRegression()),
+        ('Random Forest', RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)),
+    ]
+    if only in (None, 'Both (Comparison)'):
+        wanted = [name for name, _ in specs]
+    elif only in ('Linear Regression', 'Random Forest'):
+        wanted = [only]
+    else:
+        raise ValueError(f"Unknown model selection: {only!r}")
 
-    models['Linear Regression'] = (lr_model, scaler)
-    predictions['Linear Regression'] = lr_pred
-    metrics['Linear Regression'] = calculate_metrics(y_test, lr_pred)
+    for name, model in specs:
+        if name not in wanted:
+            continue
+        model.fit(X_train_scaled, y_train)
+        pred = model.predict(X_test_scaled)
 
-    # Random Forest
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    rf_model.fit(X_train_scaled, y_train)
-    rf_pred = rf_model.predict(X_test_scaled)
-
-    models['Random Forest'] = (rf_model, scaler)
-    predictions['Random Forest'] = rf_pred
-    metrics['Random Forest'] = calculate_metrics(y_test, rf_pred)
+        models[name] = (model, scaler)
+        predictions[name] = pred
+        metrics[name] = calculate_metrics(y_test, pred)
 
     baseline = persistence_baseline_metrics(featured_data, y_test)
 

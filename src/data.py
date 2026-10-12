@@ -8,12 +8,25 @@ is gone too.
 """
 
 import logging
+import re
 from datetime import date, datetime
 
 import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+# Yahoo tickers: letters, digits, '.', '-' and '^' (indices, e.g. ^GSPC),
+# max 12 chars. Anything else is rejected before any network call.
+_TICKER_RE = re.compile(r"^[A-Z0-9.\-^]{1,12}$")
+
+
+def sanitize_ticker(raw):
+    """Strip/uppercase ``raw``; return it if it's a plausible ticker, else None."""
+    clean = (raw or "").strip().upper()
+    if not clean or not _TICKER_RE.match(clean):
+        return None
+    return clean
 
 
 def _default_warn(msg):
@@ -44,9 +57,9 @@ def fetch_stock_data(ticker, start, end, on_error=None):
     """Fetch OHLCV history for ``[start, end]``. Returns ``None`` on failure."""
     on_error = on_error or _default_err
 
-    clean = (ticker or "").strip().upper()
-    if not clean:
-        on_error("⚠️ Please select or enter a stock ticker to analyze.")
+    clean = sanitize_ticker(ticker)
+    if clean is None:
+        on_error("⚠️ Please enter a valid stock ticker (letters, digits, `.`, `-` or `^`, max 12 characters).")
         return None
 
     try:
@@ -86,6 +99,6 @@ def fetch_history(ticker, period="2y"):
     Raises whatever ``yfinance`` raises; the CLI wrapper keeps its
     try/except + print behaviour so output is unchanged.
     """
-    clean = (ticker or "").strip().upper()
-    stock = yf.Ticker(clean)
+    clean = sanitize_ticker(ticker)
+    stock = yf.Ticker(clean or "")
     return flatten_columns(stock.history(period=period))

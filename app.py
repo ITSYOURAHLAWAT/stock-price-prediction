@@ -6,7 +6,7 @@ from plotly.subplots import make_subplots
 from datetime import date
 
 # Shared logic lives in src/ (Phase 1 refactor). This file keeps only UI code.
-from src.data import fetch_stock_data as _fetch_stock_data
+from src.data import fetch_stock_data as _fetch_stock_data, sanitize_ticker
 from src.indicators import calculate_technical_indicators
 from src.models import train_models
 from src.forecast import predict_future_prices
@@ -43,11 +43,13 @@ st.markdown('<h1 class="main-header">📈 Advanced Stock Price Predictor</h1>', 
 # Sidebar for inputs
 st.sidebar.header("📊 Configuration")
 
-# Stock ticker input with suggestions
-popular_stocks = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "NVDA", "NFLX", "SPY", "QQQ"]
-ticker = st.sidebar.selectbox("Select or enter stock ticker:", [""] + popular_stocks, index=1)
-custom_ticker = st.sidebar.text_input("Or enter custom ticker:", "")
-final_ticker = custom_ticker.upper() if custom_ticker else ticker
+# Single stock ticker input (sanitized; invalid input is rejected below).
+ticker_raw = st.sidebar.text_input(
+    "Stock ticker:",
+    value="GOOGL",
+    help="Popular tickers: AAPL, GOOGL, MSFT, AMZN, TSLA, META, NVDA, NFLX, SPY, QQQ",
+)
+final_ticker = sanitize_ticker(ticker_raw)
 
 # Date range selection
 col1, col2 = st.sidebar.columns(2)
@@ -68,9 +70,22 @@ prediction_days = st.sidebar.slider("Days to predict:", 1, 30, 7)
 # Technical indicators toggle
 show_indicators = st.sidebar.checkbox("Show Technical Indicators", True)
 
-def fetch_stock_data(ticker, start, end):
-    """Fetch stock data (thin wrapper over src.data)."""
-    return _fetch_stock_data(ticker, start, end, on_error=st.error)
+# Cached wrappers. Keys contain every input that affects the output, so a
+# cache hit is only possible for genuinely identical requests.
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_fetch(clean_ticker, start, end):
+    """Yahoo fetch cached for 1 hour. Key = (ticker, start, end)."""
+    messages = []
+    data = _fetch_stock_data(clean_ticker, start, end, on_error=messages.append)
+    return data, tuple(messages)
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_train(clean_ticker, start, end, model_type, data):
+    """Training cache. Key = (ticker, start, end, model, data): any change
+    (including fresh history) recomputes; identical reruns reuse models."""
+    only = None if model_type == "Both (Comparison)" else model_type
+    return train_models(data, include_close_std=True, only=only)
 
 # Main app logic
 # Show instructions if no analysis has been run
@@ -79,13 +94,14 @@ if 'analysis_run' not in st.session_state:
 
 analyze_button = st.sidebar.button("🚀 Analyze Stock", type="primary")
 
-if analyze_button or st.session_state.get('auto_run', False):
-    if not final_ticker or final_ticker == "":
-        st.error("⚠️ Please select or enter a stock ticker to analyze.")
+if analyze_button:
+    if not final_ticker:
+        st.error("⚠️ Please enter a valid stock ticker (letters, digits, `.`, `-` or `^`, max 12 characters).")
     else:
         with st.spinner(f"Fetching data for {final_ticker}..."):
-            # yfinance accepts date objects directly, but ensure they're in the right format
-            data = fetch_stock_data(final_ticker, start_date, end_date)
+            data, fetch_messages = _cached_fetch(final_ticker, start_date, end_date)
+        for message in fetch_messages:
+            st.error(message)
         
         if data is not None:
             if len(data) < 2:
@@ -181,7 +197,9 @@ if analyze_button or st.session_state.get('auto_run', False):
             
             try:
                 with st.spinner("Training models..."):
-                    models, predictions, metrics, test_dates, y_test, feature_cols, baseline = train_models(data)
+                    models, predictions, metrics, test_dates, y_test, feature_cols, baseline = _cached_train(
+                        final_ticker, start_date, end_date, model_type, data
+                    )
             except ValueError as e:
                 st.error(f"⚠️ {e}")
                 st.stop()
@@ -232,6 +250,7 @@ if analyze_button or st.session_state.get('auto_run', False):
             
             # Future predictions
             st.subheader(f"🔮 Future Price Predictions ({prediction_days} days)")
+            st.caption("⚠️ Illustrative only — these forecasts extrapolate past patterns and are NOT financial advice.")
             
             best_model_name = min(metrics.keys(), key=lambda x: metrics[x]['MAPE'])
             best_model, best_scaler = models[best_model_name]
@@ -263,6 +282,18 @@ if analyze_button or st.session_state.get('auto_run', False):
             })
             
             st.dataframe(future_df, use_container_width=True)
+
+            future_raw = pd.DataFrame({
+                'Date': future_dates,
+                'Predicted_Price': future_prices,
+                'Change_Pct': [((price - current_price) / current_price * 100) for price in future_prices],
+            })
+            st.download_button(
+                "⬇️ Download predictions as CSV",
+                future_raw.to_csv(index=False),
+                file_name=f"{final_ticker}_forecast_{prediction_days}d.csv",
+                mime="text/csv",
+            )
             
             # Summary statistics
             st.subheader("📊 Data Summary")
@@ -274,7 +305,7 @@ if analyze_button or st.session_state.get('auto_run', False):
             
             with col2:
                 st.write("**Model Comparison:**")
-                st.caption(f"📏 Naive baseline (predict previous close): MAPE {baseline['MAPE']:.2f}% · RMSE ${baseline['RMSE']:.2f} · R² {baseline['R²']:.4f}")
+                st.caption(f"📏 Naive baseline (predict previous close): MAPE {baseline['MAPE']:.2f}% · RMSE ${baseline['RMSE']:.2f} · R² {baseline['R²']:.4f}. If a model can't beat this baseline, it hasn't learned anything beyond 'tomorrow looks like today'.")
                 comparison_df = pd.DataFrame({**metrics, 'Naive (Prev Close)': baseline}).T
                 st.dataframe(comparison_df.round(4))
 
