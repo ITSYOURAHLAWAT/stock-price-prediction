@@ -1,13 +1,19 @@
 # 📈 Advanced Stock Price Predictor
 
-A comprehensive stock price prediction application using machine learning and technical analysis.
+A stock price analysis application using machine learning and technical analysis.
+Fetches historical data from Yahoo Finance, trains Random Forest / Linear
+Regression models on leakage-free lag and rolling features, and shows an
+interactive dashboard with a short-horizon recursive forecast.
 
 ## 🚀 Features
 
 ### **Machine Learning Models**
-- **Random Forest Regressor** - Advanced ensemble method
-- **Linear Regression** - Baseline model for comparison
-- **Feature Engineering** - Technical indicators, lagged variables, rolling statistics
+- **Random Forest Regressor** - ensemble method
+- **Linear Regression** - simple baseline model for comparison
+- **Naive persistence baseline** (predict previous close) - the benchmark to beat
+- **Feature Engineering** - lagged variables (1, 2, 3, 5 days), rolling statistics
+  (5, 10, 20 day windows); every feature uses only data available up to the
+  previous day (no look-ahead)
 - **Performance Metrics** - MAE, RMSE, R², MAPE
 
 ### **Technical Analysis**
@@ -15,20 +21,20 @@ A comprehensive stock price prediction application using machine learning and te
 - **RSI** (Relative Strength Index)
 - **Bollinger Bands**
 - **Volume Analysis**
-- **Price Pattern Recognition**
 
 ### **Interactive Web App**
-- **Real-time Stock Data** from Yahoo Finance
+- **Historical Stock Data** from Yahoo Finance (cached for 1 hour)
 - **Interactive Charts** with Plotly
-- **Multi-panel Dashboard**
-- **Future Price Predictions** (1-30 days)
-- **Model Performance Comparison**
+- **Multi-panel Dashboard** that persists while you tweak display widgets
+- **Future Price Predictions** (1-30 business days, illustrative only)
+- **Model Performance Comparison** with train-only-what-you-select
+- **CSV download** of the forecast
 
 ## 📦 Installation
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/Stock-Price-Predictor.git
+git clone <your-repo-url>
 cd Stock-Price-Predictor
 ```
 
@@ -37,79 +43,103 @@ cd Stock-Price-Predictor
 pip install -r requirements.txt
 ```
 
+3. **For development/tests:**
+```bash
+pip install -r requirements-dev.txt
+```
+
 ## 🎯 Usage
 
 ### **Web Application (Recommended)**
 ```bash
 streamlit run app.py
 ```
-Then open http://localhost:8501 in your browser.
+Then open http://localhost:8501 in your browser. Enter a ticker, pick a date
+range, click **Analyze Stock**. Changing the ticker box or dates does nothing
+until you click Analyze again; display widgets (model, days, indicators)
+re-render instantly from the cache.
 
 ### **Command Line Version**
 ```bash
 python stock_price_predictor.py
 ```
 
+### **Tests (offline, Yahoo Finance is mocked)**
+```bash
+pytest -q
+```
+
 ## 📊 How It Works
 
-1. **Data Fetching**: Downloads historical stock data from Yahoo Finance
-2. **Feature Engineering**: Creates technical indicators and lagged variables
-3. **Model Training**: Trains multiple ML models with proper validation
-4. **Prediction**: Generates future price forecasts
-5. **Visualization**: Creates interactive charts and performance metrics
+1. **Data Fetching**: Downloads historical OHLCV data from Yahoo Finance for the
+   exact start/end range (no silent substitution; empty results are an error)
+2. **Feature Engineering**: Creates lagged variables and rolling statistics,
+   all shifted so row *t* only sees information up to *t−1*
+3. **Model Training**: Trains the selected model(s) on a chronological 80/20
+   train/test split, plus a naive previous-close baseline on the same test rows
+4. **Prediction**: Recursively forecasts the next 1-30 business days by
+   rebuilding each step's feature row by name
+5. **Visualization**: Interactive charts, actual-vs-predicted plots, and a
+   model comparison table including the baseline
 
 ## 🛠️ Project Structure
 
 ```
 Stock-Price-Predictor/
-├── app.py                      # Streamlit web application (thin UI wrapper)
-├── stock_price_predictor.py    # Standalone command-line version (thin CLI wrapper)
+├── app.py                      # Streamlit web application (UI + cache wrappers)
+├── stock_price_predictor.py    # Standalone command-line version
 ├── src/                        # Shared logic imported by both entry points
-│   ├── data.py                 # Yahoo Finance fetching
+│   ├── data.py                 # Fetching, ticker sanitizing, column flattening
 │   ├── indicators.py           # Technical indicators (MA, RSI, Bollinger Bands)
-│   ├── features.py             # Feature engineering for ML
-│   ├── models.py               # Model training + metrics
-│   └── forecast.py             # Future price forecasting
+│   ├── features.py             # Leakage-free feature engineering
+│   ├── models.py               # Model training, metrics, naive baseline
+│   └── forecast.py             # Recursive by-name forecasting
+├── tests/                      # pytest suite (offline; Yahoo Finance mocked)
+│   ├── conftest.py             # Synthetic data + mock fixtures
+│   ├── test_features.py        # No-leakage tests
+│   ├── test_indicators.py      # Indicator values on known series
+│   ├── test_models.py          # Metrics edges, model selection, baseline
+│   ├── test_forecast.py        # By-name updates, length, business days
+│   ├── test_data.py            # Fetch validation, MultiIndex, tz handling
+│   ├── test_sanitize.py        # Ticker allow/deny lists
+│   └── test_app.py             # UI persistence, forecast selection, caching
 ├── requirements.txt            # Python dependencies (pinned)
-└── README.md                  # Project documentation
+├── requirements-dev.txt        # Test dependencies (pinned)
+├── pytest.ini                  # pytest configuration
+├── LICENSE                     # MIT License
+├── .gitignore                  # Python/venv/editor ignores
+└── README.md                   # Project documentation
 ```
-
-## 📈 Features Overview
-
-### **Web App Interface**
-- Stock ticker selection with popular suggestions
-- Customizable date ranges
-- Model comparison capabilities
-- Interactive technical analysis charts
-- Future price predictions with confidence intervals
-
-### **Technical Indicators**
-- **SMA/EMA**: Simple & Exponential Moving Averages
-- **RSI**: Relative Strength Index for momentum
-- **Bollinger Bands**: Volatility indicators
-- **Volume Analysis**: Trading volume patterns
-
-### **Machine Learning Features**
-- Price-based features (High/Low ratios, price ranges)
-- Lagged variables (1, 2, 3, 5 days)
-- Rolling statistics (5, 10, 20 day windows)
-- Proper train/test splitting with time series data
 
 ## 🎛️ Configuration Options
 
-- **Stock Selection**: Choose from popular stocks or enter custom ticker
-- **Date Range**: Flexible start and end date selection
-- **Model Selection**: Compare Random Forest vs Linear Regression
-- **Prediction Period**: 1-30 days future forecasting
-- **Technical Indicators**: Toggle on/off various indicators
+- **Stock Selection**: Single ticker input, sanitized (letters, digits, `.`, `-`, `=`, `^`; max 12 characters)
+- **Date Range**: Flexible start and end date selection (start must precede end)
+- **Model Selection**: Random Forest, Linear Regression, or Both (comparison)
+- **Prediction Period**: 1-30 business days of future forecasting
+- **Technical Indicators**: Toggle on/off the MA / Bollinger / RSI overlays
 
 ## 📊 Performance Metrics
 
-The application provides comprehensive model evaluation:
+The application provides model evaluation on a chronological holdout:
 - **MAE** (Mean Absolute Error)
 - **RMSE** (Root Mean Square Error)
 - **R²** (Coefficient of Determination)
 - **MAPE** (Mean Absolute Percentage Error)
+- **Naive baseline** (previous close) shown alongside — if a model can't beat
+  it, it hasn't learned anything beyond "tomorrow looks like today"
+
+## ⚠️ Known Limitations
+
+- It predicts **price levels** on a short holdout, not returns or direction.
+- **Tree models cannot extrapolate** beyond the price range seen in training;
+  forecasts flatten or drift outside it.
+- **Multi-day recursive forecasts are illustrative**: each step feeds the
+  previous prediction back in, so errors compound; volume and High/Low inputs
+  are frozen at last-known values because the model doesn't predict them.
+- The **naive previous-close baseline is the benchmark to beat** — on noisy
+  data it is often the best "model" in the table, and that is informative.
+- No time-series cross-validation or hyperparameter search yet.
 
 ## 🚨 Disclaimer
 
@@ -117,8 +147,8 @@ The application provides comprehensive model evaluation:
 
 ## 🔧 Technical Requirements
 
-- Python 3.7+
-- Internet connection (for fetching stock data)
+- Python 3.10+
+- Internet connection (for fetching stock data; tests run offline with mocks)
 - Modern web browser (for Streamlit app)
 
 ## 📝 Dependencies
@@ -143,7 +173,7 @@ The application provides comprehensive model evaluation:
 
 This project is open source and available under the [MIT License](LICENSE).
 
-## 🎯 Future Enhancements
+## 🎯 Future Enhancements (ideas, not features)
 
 - [ ] LSTM/GRU neural networks
 - [ ] Sentiment analysis integration
