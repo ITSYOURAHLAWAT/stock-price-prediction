@@ -1,11 +1,4 @@
-"""Shared model training + metrics (moved verbatim from app.py).
-
-Phase 1 note: chronological 80/20 split, single shared ``StandardScaler`` and
-``RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)`` are
-unchanged. ``n_jobs`` does not affect numerics, so the legacy CLI (which used
-the ``n_jobs`` default) now also trains with ``n_jobs=-1`` — same predictions,
-faster. Time-series validation is Phase 4+ / long-term work per instructions.
-"""
+"""Shared model training + metrics (chronological 80/20 split)."""
 
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
@@ -17,6 +10,10 @@ from .features import create_features
 
 FEATURE_EXCLUDE = ['Close', 'Open', 'High', 'Low', 'Volume', 'Dividends', 'Stock Splits']
 
+# Minimum usable rows after feature engineering (covers the 20-day windows,
+# lags and the t-1 shift, with margin for a meaningful train/test split).
+MIN_ROWS_AFTER_FEATURES = 60
+
 
 def get_feature_columns(featured_data):
     """Select feature columns (exclude OHLCV + corporate-action columns)."""
@@ -24,12 +21,17 @@ def get_feature_columns(featured_data):
 
 
 def calculate_metrics(y_true, y_pred):
-    """Calculate model performance metrics"""
+    """Calculate model performance metrics (zero-safe MAPE)."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
     mae = mean_absolute_error(y_true, y_pred)
     mse = mean_squared_error(y_true, y_pred)
     rmse = np.sqrt(mse)
     r2 = r2_score(y_true, y_pred)
-    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    # Prices are never zero in practice, but guard the division anyway.
+    valid = y_true != 0
+    mape = float(np.mean(np.abs((y_true[valid] - y_pred[valid]) / y_true[valid])) * 100) \
+        if np.any(valid) else float('nan')
 
     return {
         'MAE': mae,
@@ -40,14 +42,33 @@ def calculate_metrics(y_true, y_pred):
     }
 
 
+def persistence_baseline_metrics(featured_data, y_test):
+    """Naive baseline: predict Close[t] = actual Close[t-1] (persistence).
+
+    Uses realised history, so it is directly comparable with the model
+    metrics on the same test rows. If a model cannot beat this, it has
+    learned nothing beyond "tomorrow looks like today".
+    """
+    naive_pred = featured_data['Close'].shift(1).loc[y_test.index]
+    return calculate_metrics(y_test, naive_pred)
+
+
 def train_models(data, include_close_std=True):
     """Train prediction models.
 
-    Returns ``(models, predictions, metrics, test_index, y_test, feature_cols)``
-    with the same shapes/keys as the legacy ``app.py`` version.
+    Returns ``(models, predictions, metrics, test_index, y_test,
+    feature_cols, baseline_metrics)``. Raises ``ValueError`` when too few
+    usable rows survive feature engineering.
     """
     # Create features
     featured_data = create_features(data, include_close_std=include_close_std)
+
+    if len(featured_data) < MIN_ROWS_AFTER_FEATURES:
+        raise ValueError(
+            f"Not enough usable rows after feature engineering "
+            f"({len(featured_data)} < {MIN_ROWS_AFTER_FEATURES}). "
+            "Use a longer date range."
+        )
 
     # Select feature columns (exclude date and target)
     feature_cols = get_feature_columns(featured_data)
@@ -87,4 +108,6 @@ def train_models(data, include_close_std=True):
     predictions['Random Forest'] = rf_pred
     metrics['Random Forest'] = calculate_metrics(y_test, rf_pred)
 
-    return models, predictions, metrics, X_test.index, y_test, feature_cols
+    baseline = persistence_baseline_metrics(featured_data, y_test)
+
+    return models, predictions, metrics, X_test.index, y_test, feature_cols, baseline

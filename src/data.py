@@ -1,12 +1,19 @@
-"""Shared data-fetching helpers (moved verbatim from app.py / stock_price).
+"""Shared data-fetching helpers.
 
-Phase 1 note: logic is intentionally unchanged, including the period-mapping
-behaviour in ``fetch_stock_data``. Proper start/end handling, tz-awareness
-and retry policy are Phase 2 work.
+``fetch_stock_data`` passes the user-selected ``start``/``end`` straight to
+yfinance (no period-mapping, no silent 1-year substitution): an empty result
+is reported as an error, not quietly replaced. Because no manual date
+filtering is done anymore, the old tz-naive vs tz-aware comparison fragility
+is gone too.
 """
 
-import yfinance as yf
+import logging
 from datetime import date, datetime
+
+import pandas as pd
+import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 
 def _default_warn(msg):
@@ -17,93 +24,60 @@ def _default_err(msg):
     print(msg)
 
 
-def _default_exc(exc):
-    print(exc)
+def flatten_columns(data):
+    """Flatten yfinance MultiIndex columns (``('Close', 'AAPL')`` -> ``'Close'``)."""
+    df = data.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
 
 
-def fetch_stock_data(ticker, start, end, on_warning=None, on_error=None,
-                     on_exception=None):
-    """Fetch stock data with error handling (Streamlit-app variant).
+def _as_timestamp(value, end=False):
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.max.time() if end else datetime.min.time())
+    return pd.Timestamp(value)
 
-    ``on_warning`` / ``on_error`` / ``on_exception`` are UI callbacks so this
-    module does not depend on streamlit. ``app.py`` passes
-    ``st.warning`` / ``st.error`` / ``st.exception`` to keep behaviour identical.
-    """
-    on_warning = on_warning or _default_warn
+
+def fetch_stock_data(ticker, start, end, on_error=None):
+    """Fetch OHLCV history for ``[start, end]``. Returns ``None`` on failure."""
     on_error = on_error or _default_err
-    on_exception = on_exception or _default_exc
-    try:
-        stock = yf.Ticker(ticker)
 
-        # Try using period first (more reliable)
-        try:
-            # Calculate period from dates
-            if isinstance(start, date):
-                start_dt = datetime.combine(start, datetime.min.time())
-            else:
-                start_dt = start
-
-            if isinstance(end, date):
-                end_dt = datetime.combine(end, datetime.max.time())
-            else:
-                end_dt = end
-
-            days_diff = (end_dt - start_dt).days
-
-            # Use period if reasonable, otherwise use start/end
-            if days_diff <= 730:  # 2 years
-                if days_diff <= 5:
-                    period = "5d"
-                elif days_diff <= 30:
-                    period = "1mo"
-                elif days_diff <= 90:
-                    period = "3mo"
-                elif days_diff <= 180:
-                    period = "6mo"
-                elif days_diff <= 365:
-                    period = "1y"
-                else:
-                    period = "2y"
-
-                data = stock.history(period=period)
-            else:
-                # For longer periods, use start/end dates
-                data = stock.history(start=start, end=end)
-        except:
-            # Fallback to start/end dates
-            data = stock.history(start=start, end=end)
-
-        if data.empty or len(data) == 0:
-            # Try alternative method with period
-            on_warning(f"Trying alternative method to fetch data for {ticker}...")
-            data = stock.history(period="1y")
-
-            if data.empty or len(data) == 0:
-                on_error(f"❌ No data found for ticker '{ticker}'. Please check:")
-                on_error("1. The ticker symbol is correct (e.g., AAPL, GOOGL, MSFT)")
-                on_error("2. Your internet connection is working")
-                on_error("3. Yahoo Finance API is accessible")
-                return None
-
-        # Filter by date range if needed
-        if not data.empty and isinstance(start, date) and isinstance(end, date):
-            # Convert date to datetime for comparison
-            start_dt = datetime.combine(start, datetime.min.time())
-            end_dt = datetime.combine(end, datetime.max.time())
-            data = data[(data.index >= start_dt) & (data.index <= end_dt)]
-            if data.empty:
-                on_warning("⚠️ No data in selected date range. Showing available data.")
-                data = stock.history(period="1y")
-
-        return data
-    except Exception as e:
-        on_error(f"❌ Error fetching data: {str(e)}")
-        on_error("This might be due to:")
-        on_error("• Internet connection issues")
-        on_error("• Yahoo Finance API temporarily unavailable")
-        on_error("• Invalid ticker symbol")
-        on_exception(e)  # Show full error for debugging
+    clean = (ticker or "").strip().upper()
+    if not clean:
+        on_error("⚠️ Please select or enter a stock ticker to analyze.")
         return None
+
+    try:
+        start_ts = _as_timestamp(start)
+        end_ts = _as_timestamp(end, end=True)
+    except (TypeError, ValueError) as exc:
+        on_error(f"❌ Invalid date range: {exc}")
+        return None
+    if start_ts >= end_ts:
+        on_error("⚠️ Start date must be before end date.")
+        return None
+
+    try:
+        data = yf.Ticker(clean).history(start=start, end=end)
+    except Exception:
+        logger.exception("yfinance fetch failed for %s", clean)
+        on_error(f"❌ Error fetching data for '{clean}'. Please check:")
+        on_error("1. The ticker symbol is correct (e.g., AAPL, GOOGL, MSFT)")
+        on_error("2. Your internet connection is working")
+        on_error("3. Yahoo Finance API is accessible")
+        return None
+
+    data = flatten_columns(data)
+    if data.empty:
+        on_error(f"❌ No data found for ticker '{clean}' in the selected range. Please check:")
+        on_error("1. The ticker symbol is correct (e.g., AAPL, GOOGL, MSFT)")
+        on_error("2. The date range contains trading days")
+        on_error("3. Yahoo Finance API is accessible")
+        return None
+
+    return data
 
 
 def fetch_history(ticker, period="2y"):
@@ -112,5 +86,6 @@ def fetch_history(ticker, period="2y"):
     Raises whatever ``yfinance`` raises; the CLI wrapper keeps its
     try/except + print behaviour so output is unchanged.
     """
-    stock = yf.Ticker(ticker)
-    return stock.history(period=period)
+    clean = (ticker or "").strip().upper()
+    stock = yf.Ticker(clean)
+    return flatten_columns(stock.history(period=period))

@@ -1,6 +1,4 @@
 import matplotlib.pyplot as plt
-import warnings
-warnings.filterwarnings('ignore')
 
 # Shared logic lives in src/ (Phase 1 refactor). This file keeps only CLI code.
 from src.data import fetch_history
@@ -22,11 +20,15 @@ class StockPredictor:
         """Fetch stock data from Yahoo Finance"""
         try:
             self.data = fetch_history(self.ticker, period=self.period)
-            print(f"✅ Successfully fetched {len(self.data)} days of data for {self.ticker}")
-            return True
         except Exception as e:
             print(f"❌ Error fetching data: {e}")
             return False
+        if self.data is None or self.data.empty:
+            print(f"❌ No data found for ticker '{self.ticker}'. Please check the ticker symbol and your connection.")
+            self.data = None
+            return False
+        print(f"✅ Successfully fetched {len(self.data)} days of data for {self.ticker}")
+        return True
 
     def calculate_technical_indicators(self):
         """Calculate technical indicators"""
@@ -52,7 +54,14 @@ class StockPredictor:
         data = self.data
         assert data is not None, "Data should not be None at this point"
         # Legacy CLI never computed Close_Std_* — preserve that exactly.
-        return _create_features(data, include_close_std=False)
+        feat = _create_features(data, include_close_std=False)
+        # Indicator columns carried over from calculate_technical_indicators()
+        # describe day t (unlike src features); shift them so row t only sees
+        # information up to t-1. (Price_Change is already shifted inside src.)
+        for col in ('MA_20', 'MA_50', 'RSI', 'Volume_MA'):
+            if col in feat.columns:
+                feat[col] = feat[col].shift(1)
+        return feat.dropna()
 
     def train_models(self):
         """Train prediction models"""
@@ -60,9 +69,13 @@ class StockPredictor:
             print("❌ No data available. Please fetch data first.")
             return
 
-        models, predictions, metrics, test_index, y_test, _feature_cols = _train_models(
-            self.data, include_close_std=False
-        )
+        try:
+            models, predictions, metrics, test_index, y_test, _feature_cols, baseline = _train_models(
+                self.data, include_close_std=False
+            )
+        except ValueError as e:
+            print(f"❌ {e}")
+            return
 
         # Keep a fitted scaler for predict_future (same object the app uses).
         self.scaler = models['Linear Regression'][1]
@@ -83,6 +96,8 @@ class StockPredictor:
             }
 
             print(f"✅ {name} trained - R²: {m['R²']:.4f}, RMSE: ${m['RMSE']:.2f}")
+
+        print(f"📏 Naive baseline (prev close) - R²: {baseline['R²']:.4f}, RMSE: ${baseline['RMSE']:.2f}")
 
         self.models = results
         return results
@@ -153,7 +168,8 @@ class StockPredictor:
 
         print(f"🔮 Predicting next {days} days using {best_model_name}:")
 
-        # Same feature columns as training (legacy CLI behaviour, non-recursive).
+        # Same feature columns as training; the recursive forecast rebuilds
+        # each step's row by feature name (see src.forecast).
         featured_data = self.create_features()
         assert featured_data is not None, "Featured data should not be None"
         feature_cols = _get_feature_columns(featured_data)
@@ -161,7 +177,6 @@ class StockPredictor:
         current_price = self.data['Close'].iloc[-1]
         predictions = _predict_future(
             best_model, self.scaler, self.data, feature_cols, days,
-            include_close_std=False, recursive_update=False,
         )
 
         for day, pred in enumerate(predictions, start=1):
@@ -172,8 +187,8 @@ class StockPredictor:
 
     def display_summary(self):
         """Display summary statistics"""
-        if self.data is None:
-            print("❌ No data available.")
+        if self.data is None or len(self.data) < 2:
+            print("❌ Not enough data available.")
             return
 
         current_price = self.data['Close'].iloc[-1]
@@ -183,8 +198,8 @@ class StockPredictor:
         print(f"\n📊 {self.ticker} Summary:")
         print(f"Current Price: ${current_price:.2f}")
         print(f"Daily Change: ${price_change:+.2f} ({price_change_pct:+.2f}%)")
-        print(f"52W High: ${self.data['High'].max():.2f}")
-        print(f"52W Low: ${self.data['Low'].min():.2f}")
+        print(f"Period High: ${self.data['High'].max():.2f}")
+        print(f"Period Low: ${self.data['Low'].min():.2f}")
         print(f"Average Volume: {self.data['Volume'].mean():,.0f}")
 
         if self.models:

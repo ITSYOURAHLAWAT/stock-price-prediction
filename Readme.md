@@ -141,8 +141,7 @@ The application provides comprehensive model evaluation:
 
 ## 📜 License
 
-No license file yet — the previous link to `LICENSE` was removed because the
-file does not exist. Tell us which license you want (e.g. MIT) and it will be added.
+This project is open source and available under the [MIT License](LICENSE).
 
 ## 🎯 Future Enhancements
 

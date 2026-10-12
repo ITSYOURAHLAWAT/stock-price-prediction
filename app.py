@@ -4,8 +4,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import date
-import warnings
-warnings.filterwarnings('ignore')
 
 # Shared logic lives in src/ (Phase 1 refactor). This file keeps only UI code.
 from src.data import fetch_stock_data as _fetch_stock_data
@@ -71,13 +69,8 @@ prediction_days = st.sidebar.slider("Days to predict:", 1, 30, 7)
 show_indicators = st.sidebar.checkbox("Show Technical Indicators", True)
 
 def fetch_stock_data(ticker, start, end):
-    """Fetch stock data with error handling (thin wrapper over src.data)."""
-    return _fetch_stock_data(
-        ticker, start, end,
-        on_warning=st.warning,
-        on_error=st.error,
-        on_exception=st.exception,
-    )
+    """Fetch stock data (thin wrapper over src.data)."""
+    return _fetch_stock_data(ticker, start, end, on_error=st.error)
 
 # Main app logic
 # Show instructions if no analysis has been run
@@ -95,6 +88,9 @@ if analyze_button or st.session_state.get('auto_run', False):
             data = fetch_stock_data(final_ticker, start_date, end_date)
         
         if data is not None:
+            if len(data) < 2:
+                st.error("⚠️ Not enough data returned (need at least 2 trading days). Try a longer date range.")
+                st.stop()
             st.session_state['analysis_run'] = True
             # Display basic stock info
             col1, col2, col3, col4 = st.columns(4)
@@ -106,9 +102,9 @@ if analyze_button or st.session_state.get('auto_run', False):
             with col1:
                 st.metric("Current Price", f"${current_price:.2f}", f"{price_change:+.2f} ({price_change_pct:+.2f}%)")
             with col2:
-                st.metric("52W High", f"${data['High'].max():.2f}")
+                st.metric("Period High", f"${data['High'].max():.2f}")
             with col3:
-                st.metric("52W Low", f"${data['Low'].min():.2f}")
+                st.metric("Period Low", f"${data['Low'].min():.2f}")
             with col4:
                 st.metric("Avg Volume", f"{data['Volume'].mean():,.0f}")
             
@@ -183,8 +179,12 @@ if analyze_button or st.session_state.get('auto_run', False):
             # Model training and prediction
             st.subheader("🤖 Machine Learning Predictions")
             
-            with st.spinner("Training models..."):
-                models, predictions, metrics, test_dates, y_test, feature_cols = train_models(data)
+            try:
+                with st.spinner("Training models..."):
+                    models, predictions, metrics, test_dates, y_test, feature_cols, baseline = train_models(data)
+            except ValueError as e:
+                st.error(f"⚠️ {e}")
+                st.stop()
             
             # Display model performance
             if model_type == "Both (Comparison)":
@@ -237,7 +237,7 @@ if analyze_button or st.session_state.get('auto_run', False):
             best_model, best_scaler = models[best_model_name]
             
             future_prices = predict_future_prices(best_model, best_scaler, data, feature_cols, prediction_days)
-            future_dates = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=prediction_days)
+            future_dates = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=prediction_days, freq='B')
             
             # Create future predictions chart
             fig_future = go.Figure()
@@ -274,7 +274,8 @@ if analyze_button or st.session_state.get('auto_run', False):
             
             with col2:
                 st.write("**Model Comparison:**")
-                comparison_df = pd.DataFrame(metrics).T
+                st.caption(f"📏 Naive baseline (predict previous close): MAPE {baseline['MAPE']:.2f}% · RMSE ${baseline['RMSE']:.2f} · R² {baseline['R²']:.4f}")
+                comparison_df = pd.DataFrame({**metrics, 'Naive (Prev Close)': baseline}).T
                 st.dataframe(comparison_df.round(4))
 
 # Sidebar information
