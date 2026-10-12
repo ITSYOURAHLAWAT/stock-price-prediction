@@ -100,6 +100,10 @@ class StockPredictor:
         print(f"📏 Naive baseline (zero return) - price RMSE: ${zb['price']['RMSE']:.2f}, "
               f"MAPE: {zb['price']['MAPE']:.2f}%, always-up dir: "
               f"{baselines['always_up_dir_acc'] * 100:.1f}%")
+        for vname, vbeats in res['verdict'].items():
+            print(f"{'✅' if vbeats else '⛔'} {vname} verdict: "
+                  f"{'beats' if vbeats else 'does not beat'} the naive baseline "
+                  f"(pooled R² {metrics[vname]['r2_oos']:.3f})")
 
         self.models = results
         # Keep the training feature columns (and the fitted pipelines) so

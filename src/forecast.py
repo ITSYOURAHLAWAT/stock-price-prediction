@@ -93,3 +93,27 @@ def predict_future_prices(model, data, feature_cols, days):
         pred_closes.append((closes + pred_closes)[-1] * float(np.exp(r_hat)))
 
     return {'close': pred_closes, 'return': pred_rets}
+
+
+def prediction_intervals(point_rets, residuals, last_close, lo_q=10, hi_q=90):
+    """Approximate 80% price band from pooled out-of-sample return residuals.
+
+    For horizon ``h`` the cumulative-return bounds are the point cumulative
+    return plus the residual percentiles scaled by ``sqrt(h)`` (random-walk
+    error growth), converted to price via ``last_close * exp(...)``.
+
+    The quantiles are clamped to straddle zero (``min(q10, 0)`` /
+    ``max(q90, 0)``) so ``lower <= point <= upper`` holds even for a
+    pathologically biased model; for any sane residual spread this equals the
+    literal percentile band.
+    """
+    resid = np.asarray(residuals, dtype=float)
+    if len(resid) == 0:
+        raise ValueError("Need pooled residuals to build prediction intervals.")
+    q10, q90 = np.percentile(resid, [lo_q, hi_q])
+    lo, hi = min(float(q10), 0.0), max(float(q90), 0.0)
+    cum = np.cumsum(np.asarray(point_rets, dtype=float))
+    horizon = np.arange(1, len(cum) + 1)
+    lower = float(last_close) * np.exp(cum + lo * np.sqrt(horizon))
+    upper = float(last_close) * np.exp(cum + hi * np.sqrt(horizon))
+    return [float(v) for v in lower], [float(v) for v in upper]

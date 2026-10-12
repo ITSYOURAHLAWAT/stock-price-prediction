@@ -9,7 +9,7 @@ from datetime import date
 from src.data import fetch_stock_data as _fetch_stock_data, sanitize_ticker
 from src.indicators import calculate_technical_indicators
 from src.models import baseline_warning_text, train_models
-from src.forecast import predict_future_prices
+from src.forecast import predict_future_prices, prediction_intervals
 
 # Page configuration
 st.set_page_config(
@@ -270,7 +270,7 @@ if 'analysis' in st.session_state:
 
         # Future predictions
         st.subheader(f"🔮 Future Price Predictions ({prediction_days} days)")
-        st.caption("⚠️ Illustrative only — these forecasts extrapolate past patterns and are NOT financial advice.")
+        st.caption("⚠️ Illustrative only — these forecasts extrapolate past patterns and are NOT financial advice. Band: approximate 80% interval from out-of-sample return residuals (√h scaling). Volume and high-low inputs are frozen at last observed values during recursion.")
 
         # The forecast uses the SELECTED model; only "Both" falls back to lowest MAPE.
         if model_type == "Both (Comparison)":
@@ -287,9 +287,15 @@ if 'analysis' in st.session_state:
         if warning_text is not None:
             st.warning(warning_text)
 
+        beats = result['verdict'][forecast_model_name]
+        if not beats:
+            st.warning(f"⛔ {forecast_model_name}: no better than the naive baseline out-of-sample (pooled R² {metrics[forecast_model_name]['r2_oos']:.3f}). The flat naive line is drawn for comparison.")
+
         future = predict_future_prices(forecast_model, data, feature_cols, prediction_days)
         future_prices = future['close']
         future_dates = pd.date_range(start=data.index[-1] + pd.Timedelta(days=1), periods=prediction_days, freq='B')
+        lower, upper = prediction_intervals(
+            future['return'], result['residuals'][forecast_model_name], current_price)
 
         # Create future predictions chart
         fig_future = go.Figure()
@@ -299,9 +305,21 @@ if 'analysis' in st.session_state:
         fig_future.add_trace(go.Scatter(x=recent_data.index, y=recent_data['Close'],
                                       name='Historical', line=dict(color='blue', width=2)))
 
-        # Future predictions
-        fig_future.add_trace(go.Scatter(x=future_dates, y=future_prices,
+        # Forecast line connected to the last actual close
+        line_x = [data.index[-1]] + list(future_dates)
+        fig_future.add_trace(go.Scatter(x=line_x, y=[current_price] + future_prices,
                                       name='Predicted', line=dict(color='red', width=2, dash='dash')))
+
+        # Approximate 80% uncertainty band
+        fig_future.add_trace(go.Scatter(x=line_x, y=[current_price] + upper,
+                                      name='80% upper', line=dict(color='gray', width=1, dash='dot')))
+        fig_future.add_trace(go.Scatter(x=line_x, y=[current_price] + lower,
+                                      name='80% lower', line=dict(color='gray', width=1, dash='dot'),
+                                      fill='tonexty', fillcolor='rgba(128,128,128,0.15)'))
+
+        if not beats:
+            fig_future.add_trace(go.Scatter(x=future_dates, y=[current_price] * prediction_days,
+                                          name='Naive (flat)', line=dict(color='green', width=1, dash='dot')))
 
         fig_future.update_layout(title=f"Future Price Predictions using {forecast_model_name}",
                                xaxis_title="Date", yaxis_title="Price ($)")
@@ -319,6 +337,8 @@ if 'analysis' in st.session_state:
         future_raw = pd.DataFrame({
             'Date': future_dates,
             'Predicted_Price': future_prices,
+            'Lower_80': lower,
+            'Upper_80': upper,
             'Change_Pct': [((price - current_price) / current_price * 100) for price in future_prices],
         })
         st.download_button(
@@ -357,6 +377,23 @@ if 'analysis' in st.session_state:
             }
             comparison_df = pd.DataFrame(comparison).T
             st.dataframe(comparison_df.round(4))
+
+            st.write("**Out-of-sample verdict (pooled walk-forward):**")
+            for vname, vbeats in result['verdict'].items():
+                st.write(f"{'✅' if vbeats else '⛔'} {vname}: "
+                         f"{'beats' if vbeats else 'does not beat'} the naive baseline "
+                         f"(pooled R² {metrics[vname]['r2_oos']:.3f})")
+
+            st.write(f"**Walk-forward folds ({forecast_model_name}, gap 1 day):**")
+            fold_df = pd.DataFrame([{
+                'Fold': i + 1,
+                'n': f['n'],
+                'Ret RMSE %': f['return']['RMSE'] * 100,
+                'Price MAPE': f['price']['MAPE'],
+                'DirAcc %': f['dir_acc'] * 100,
+                'R2_OOS': f['r2_oos'],
+            } for i, f in enumerate(metrics[forecast_model_name]['folds'])])
+            st.dataframe(fold_df.round(4))
 
 # Sidebar information
 st.sidebar.markdown("---")
