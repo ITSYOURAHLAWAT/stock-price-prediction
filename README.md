@@ -2,8 +2,9 @@
 
 A stock price analysis application using machine learning and technical analysis.
 Fetches historical data from Yahoo Finance, trains Random Forest / Linear
-Regression models on leakage-free lag and rolling features, and shows an
-interactive dashboard with a short-horizon recursive forecast.
+Regression models to predict next-day log returns from scale-free signals,
+validates them walk-forward out-of-sample, and shows an interactive dashboard
+with a short-horizon recursive forecast and approximate intervals.
 
 ## 🚀 Features
 
@@ -11,9 +12,10 @@ interactive dashboard with a short-horizon recursive forecast.
 - **Random Forest Regressor** - ensemble method
 - **Linear Regression** - simple baseline model for comparison
 - **Naive persistence baseline** (predict previous close) - the benchmark to beat
-- **Feature Engineering** - lagged variables (1, 2, 3, 5 days), rolling statistics
-  (5, 10, 20 day windows); every feature uses only data available up to the
-  previous day (no look-ahead)
+- **Feature Engineering** - scale-free signals only (lagged log returns,
+  rolling return mean/std, distance-from-trend ratios, RSI, volume and
+  high-low ratios); every feature uses only data available up to the
+  previous day (no look-ahead); the target is the next-day log return
 - **Performance Metrics** - MAE, RMSE, R², MAPE
 
 ### **Technical Analysis**
@@ -26,7 +28,8 @@ interactive dashboard with a short-horizon recursive forecast.
 - **Historical Stock Data** from Yahoo Finance (cached for 1 hour)
 - **Interactive Charts** with Plotly
 - **Multi-panel Dashboard** that persists while you tweak display widgets
-- **Future Price Predictions** (1-30 business days, illustrative only)
+- **Future Price Predictions** (1-30 business days, illustrative only, with an
+  approximate 80% interval band)
 - **Model Performance Comparison** with train-only-what-you-select
 - **CSV download** of the forecast
 
@@ -73,14 +76,22 @@ pytest -q
 
 1. **Data Fetching**: Downloads historical OHLCV data from Yahoo Finance for the
    exact start/end range (no silent substitution; empty results are an error)
-2. **Feature Engineering**: Creates lagged variables and rolling statistics,
-   all shifted so row *t* only sees information up to *t−1*
-3. **Model Training**: Trains the selected model(s) on a chronological 80/20
-   train/test split, plus a naive previous-close baseline on the same test rows
-4. **Prediction**: Recursively forecasts the next 1-30 business days by
-   rebuilding each step's feature row by name
-5. **Visualization**: Interactive charts, actual-vs-predicted plots, and a
-   model comparison table including the baseline
+2. **Feature Engineering**: Creates scale-free signals (return lags, rolling
+   return stats, trend ratios, RSI, volume/high-low ratios), all shifted so
+   row *t* only sees information up to *t−1*; the target is the next-day log
+   return
+3. **Model Training**: Trains the selected model(s) as
+   `Pipeline(StandardScaler, model)` and evaluates them with walk-forward
+   validation (5 expanding folds, 1-day gap, refit per fold), plus a naive
+   zero-return baseline and an always-up direction baseline on the same
+   out-of-sample rows
+4. **Prediction**: Recursively forecasts the next 1-30 business days (each
+   step predicts a return, rebuilds features by name from the simulated
+   series; volume/high-low inputs stay frozen), with an approximate 80%
+   interval from pooled out-of-sample residuals
+5. **Visualization**: Interactive charts, actual-vs-predicted plots, per-fold
+   tables, verdict vs baseline, and a model comparison table including the
+   baseline
 
 ## 🛠️ Project Structure
 
@@ -121,25 +132,30 @@ Stock-Price-Predictor/
 
 ## 📊 Performance Metrics
 
-The application provides model evaluation on a chronological holdout:
-- **MAE** (Mean Absolute Error)
-- **RMSE** (Root Mean Square Error)
-- **R²** (Coefficient of Determination)
-- **MAPE** (Mean Absolute Percentage Error)
-- **Naive baseline** (previous close) shown alongside — if a model can't beat
-  it, it hasn't learned anything beyond "tomorrow looks like today"
+The application evaluates models pooled out-of-sample over 5 walk-forward folds:
+- **MAE** (Mean Absolute Error) — on returns and on reconstructed prices
+- **RMSE** (Root Mean Square Error) — on returns and on reconstructed prices
+- **R²** (Coefficient of Determination) — out-of-sample vs the zero-return baseline
+- **MAPE** (Mean Absolute Percentage Error) — on prices only
+- **Directional accuracy** — vs an always-up baseline
+- **Verdict** — "beats baseline" only with pooled return R² > 0 AND price
+  RMSE below the naive baseline; otherwise the app says so plainly
 
 ## ⚠️ Known Limitations
 
-- It predicts **price levels** on a short holdout, not returns or direction.
-- **Tree models cannot extrapolate** beyond the price range seen in training;
-  forecasts flatten or drift outside it.
+- It predicts **next-day log returns** (converted to price levels for display),
+  not a trading strategy.
+- **Tree models cannot extrapolate** beyond patterns seen in training; the
+  scale-free features remove price-level memorization but not regime change.
 - **Multi-day recursive forecasts are illustrative**: each step feeds the
-  previous prediction back in, so errors compound; volume and High/Low inputs
+  previous prediction back in, so errors compound; volume and high-low inputs
   are frozen at last-known values because the model doesn't predict them.
-- The **naive previous-close baseline is the benchmark to beat** — on noisy
-  data it is often the best "model" in the table, and that is informative.
-- No time-series cross-validation or hyperparameter search yet.
+- **Intervals are approximate**: residual percentiles scaled by √horizon, not
+  calibrated probabilities.
+- **Walk-forward validation with fixed settings** — no cross-validated tuning,
+  no hyperparameter search.
+- The **naive zero-return baseline is the benchmark to beat** — on noisy data
+  it is often the best "model" in the table, and that is informative.
 
 ## 🚨 Disclaimer
 

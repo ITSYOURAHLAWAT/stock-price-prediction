@@ -52,6 +52,19 @@ def test_scaler_fit_on_train_fold_only(ohlcv):
         break  # one fold suffices to pin the wiring
 
 
+def test_no_test_index_in_its_train_set(ohlcv):
+    """Within each fold, train and test rows are disjoint (expanding window)."""
+    res = train_models(ohlcv, only="Linear Regression")
+    folds = res["metrics"]["Linear Regression"]["folds"]
+    last_train_end = -1
+    for b in folds:
+        train = set(range(0, b["train_end_pos"] + 1))
+        test = set(range(b["test_start_pos"], b["test_start_pos"] + b["n"]))
+        assert train.isdisjoint(test)
+        assert b["train_end_pos"] > last_train_end  # window expands
+        last_train_end = b["train_end_pos"]
+
+
 def test_pooled_metrics_match_concatenated_oos(ohlcv):
     res = train_models(ohlcv, only="Linear Regression")
     m = res["metrics"]["Linear Regression"]

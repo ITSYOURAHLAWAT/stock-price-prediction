@@ -39,6 +39,13 @@ def test_directional_accuracy_basic():
     assert directional_accuracy([0.01, -0.02, 0.03], [0.005, -0.01, -0.01]) == pytest.approx(2 / 3)
 
 
+def test_directional_accuracy_edges():
+    assert directional_accuracy([0.01, -0.02], [0.02, -0.01]) == 1.0
+    assert directional_accuracy([0.01, -0.02], [-0.02, 0.01]) == 0.0
+    assert directional_accuracy([0.0, 0.0], [0.0, 0.0]) == 1.0  # sign(0) == sign(0)
+    assert np.isnan(directional_accuracy([], []))
+
+
 def test_baseline_warning_text_both_branches():
     assert baseline_warning_text("RF", 0.5, 1.0) is None  # winning: silent
     text = baseline_warning_text("RF", 1.5, 1.0)

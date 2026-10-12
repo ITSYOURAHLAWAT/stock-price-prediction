@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from src.features import FEATURE_COLS
-from src.forecast import _feature_row, predict_future_prices
+from src.forecast import _feature_row, predict_future_prices, prediction_intervals
 from src.indicators import rsi_last
 from src.models import train_models
 
@@ -51,3 +51,17 @@ def test_forecast_dates_are_business_days_only():
     assert len(dates) == 10
     assert (dates.weekday < 5).all()
     assert dates[0].weekday() == 0  # Friday -> Monday
+
+
+def test_interval_ordering_and_growth(ohlcv):
+    res = train_models(ohlcv, only="Linear Regression")  # seed-11 fixture
+    pipe = res["models"]["Linear Regression"]
+    out = predict_future_prices(pipe, ohlcv, res["feature_cols"], 7)
+    last = float(ohlcv["Close"].iloc[-1])
+    lower, upper = prediction_intervals(
+        out["return"], res["residuals"]["Linear Regression"], last)
+
+    assert len(lower) == len(upper) == 7
+    assert all(lo <= p <= hi for lo, p, hi in zip(lower, out["close"], upper))
+    widths = [hi - lo for lo, hi in zip(lower, upper)]
+    assert all(b > a for a, b in zip(widths, widths[1:]))  # band widens with h
