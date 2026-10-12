@@ -8,7 +8,7 @@ from datetime import date
 # Shared logic lives in src/ (Phase 1 refactor). This file keeps only UI code.
 from src.data import fetch_stock_data as _fetch_stock_data, sanitize_ticker
 from src.indicators import calculate_technical_indicators
-from src.models import train_models
+from src.models import baseline_warning_text, train_models
 from src.forecast import predict_future_prices
 
 # Page configuration
@@ -280,8 +280,12 @@ if 'analysis' in st.session_state:
         forecast_model = models[forecast_model_name]
         naive_price_mape = baselines['zero_return']['price']['MAPE']
 
-        if metrics[forecast_model_name]['price']['MAPE'] > naive_price_mape:
-            st.warning(f"⚠️ The {forecast_model_name} forecast (MAPE {metrics[forecast_model_name]['price']['MAPE']:.2f}%) does not beat the naive baseline (MAPE {naive_price_mape:.2f}%). Treat it with extra skepticism — past patterns alone aren't predicting this series.")
+        warning_text = baseline_warning_text(
+            forecast_model_name,
+            metrics[forecast_model_name]['price']['MAPE'],
+            naive_price_mape)
+        if warning_text is not None:
+            st.warning(warning_text)
 
         future = predict_future_prices(forecast_model, data, feature_cols, prediction_days)
         future_prices = future['close']

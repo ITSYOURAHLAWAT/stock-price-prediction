@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from src.models import (
+    baseline_warning_text,
     directional_accuracy,
     price_metrics,
     r2_vs_zero,
@@ -38,9 +39,18 @@ def test_directional_accuracy_basic():
     assert directional_accuracy([0.01, -0.02, 0.03], [0.005, -0.01, -0.01]) == pytest.approx(2 / 3)
 
 
+def test_baseline_warning_text_both_branches():
+    assert baseline_warning_text("RF", 0.5, 1.0) is None  # winning: silent
+    text = baseline_warning_text("RF", 1.5, 1.0)
+    assert "does not beat the naive baseline" in text
+    assert "1.50%" in text and "1.00%" in text
+    assert baseline_warning_text("RF", float("nan"), 1.0) is None
+
+
 def test_train_result_shape_and_features(ohlcv):
     res = train_models(ohlcv)
-    assert set(res) == {"feature_cols", "target_col", "models", "test", "metrics", "baselines"}
+    assert set(res) == {"feature_cols", "target_col", "models", "test",
+                        "metrics", "baselines", "residuals", "verdict"}
     assert res["target_col"] == "Target"
     assert len(res["feature_cols"]) == 15
     assert "Close_Lag_1" not in res["feature_cols"]  # no price-level features
