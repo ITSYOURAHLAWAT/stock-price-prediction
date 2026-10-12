@@ -16,6 +16,7 @@ class StockPredictor:
         self.data = None
         self.models = {}
         self.scaler = None
+        self.feature_cols = None
 
     def fetch_data(self):
         """Fetch stock data from Yahoo Finance"""
@@ -71,7 +72,7 @@ class StockPredictor:
             return
 
         try:
-            models, predictions, metrics, test_index, y_test, _feature_cols, baseline = _train_models(
+            models, predictions, metrics, test_index, y_test, feature_cols, baseline = _train_models(
                 self.data, include_close_std=False
             )
         except ValueError as e:
@@ -101,6 +102,9 @@ class StockPredictor:
         print(f"📏 Naive baseline (prev close) - R²: {baseline['R²']:.4f}, RMSE: ${baseline['RMSE']:.2f}")
 
         self.models = results
+        # Keep the training feature columns (and the shared fitted scaler) so
+        # predict_future reuses them instead of rebuilding features for names.
+        self.feature_cols = feature_cols
         return results
 
     def plot_results(self):
@@ -169,11 +173,14 @@ class StockPredictor:
 
         print(f"🔮 Predicting next {days} days using {best_model_name}:")
 
-        # Same feature columns as training; the recursive forecast rebuilds
-        # each step's row by feature name (see src.forecast).
-        featured_data = self.create_features()
-        assert featured_data is not None, "Featured data should not be None"
-        feature_cols = _get_feature_columns(featured_data)
+        # Reuse the training feature columns (fallback: recompute names only
+        # if predict_future is called without training first).
+        if self.feature_cols is None:
+            featured_data = self.create_features()
+            assert featured_data is not None, "Featured data should not be None"
+            feature_cols = _get_feature_columns(featured_data)
+        else:
+            feature_cols = self.feature_cols
 
         current_price = self.data['Close'].iloc[-1]
         predictions = _predict_future(
@@ -223,7 +230,7 @@ def main():
     else:
         ticker = sanitize_ticker(raw)
         if ticker is None:
-            print("❌ Invalid ticker. Use letters, digits, `.`, `-` or `^` (max 12 characters).")
+            print("❌ Invalid ticker. Use letters, digits, `.`, `-`, `=` or `^` (max 12 characters).")
             return
 
     # Initialize predictor

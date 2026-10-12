@@ -16,9 +16,10 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-# Yahoo tickers: letters, digits, '.', '-' and '^' (indices, e.g. ^GSPC),
-# max 12 chars. Anything else is rejected before any network call.
-_TICKER_RE = re.compile(r"^[A-Z0-9.\-^]{1,12}$")
+# Yahoo tickers: letters, digits, '.', '-', '=' (e.g. EURUSD=X, GC=F) and
+# '^' (indices, e.g. ^GSPC), max 12 chars. Anything else is rejected before
+# any network call.
+_TICKER_RE = re.compile(r"^[A-Z0-9.\-=^]{1,12}$")
 
 
 def sanitize_ticker(raw):
@@ -59,7 +60,7 @@ def fetch_stock_data(ticker, start, end, on_error=None):
 
     clean = sanitize_ticker(ticker)
     if clean is None:
-        on_error("⚠️ Please enter a valid stock ticker (letters, digits, `.`, `-` or `^`, max 12 characters).")
+        on_error("⚠️ Please enter a valid stock ticker (letters, digits, `.`, `-`, `=` or `^`, max 12 characters).")
         return None
 
     try:
