@@ -82,15 +82,14 @@ def test_dashboard_persists_across_widget_changes(clean_caches, yahoo_mock):
 def test_forecast_uses_selected_model(clean_caches, yahoo_mock):
     frame = make_ohlcv(seed=5, tz="America/New_York")
     yahoo_mock["frame"] = frame
-    models, _, metrics, _, _, fcols, _ = train_models(frame, only="Linear Regression")
+    res = train_models(frame, only="Linear Regression")
 
     at = AppTest.from_file(APP)
     at.run()
     _run_analysis(at, "TSTFC", model="Linear Regression", days=7)
 
-    expected = np.array(predict_future_prices(models["Linear Regression"][0],
-                                              models["Linear Regression"][1],
-                                              frame, fcols, 7))
+    expected = np.array(predict_future_prices(res["models"]["Linear Regression"],
+                                              frame, res["feature_cols"], 7)["close"])
     got, tbl = _future_prices(at)
     assert np.allclose(got, np.round(expected, 2), atol=0.01)
     assert (pd.to_datetime(tbl["Date"]).dt.weekday < 5).all()  # business days only
@@ -121,16 +120,16 @@ def test_cache_hit_on_repeat_miss_on_change(clean_caches, yahoo_mock):
 
 
 def test_no_warning_when_model_beats_baseline(clean_caches, yahoo_mock):
-    # Seed 5 (offline): LR MAPE 0.864% < baseline 0.868% -> no warning.
-    yahoo_mock["frame"] = make_ohlcv(seed=5, tz="America/New_York")
+    # Seed 13 (offline): RF price MAPE 0.762% < baseline 0.794% -> no warning.
+    yahoo_mock["frame"] = make_ohlcv(seed=13, tz="America/New_York")
     at = AppTest.from_file(APP)
     at.run()
-    _run_analysis(at, "TSTNW", model="Linear Regression")
+    _run_analysis(at, "TSTNW", model="Random Forest")
     assert "does not beat the naive baseline" not in _all_text(at)
 
 
 def test_warning_when_model_loses_to_baseline(clean_caches, yahoo_mock):
-    # Seed 8 (offline): LR MAPE 1.277% > baseline 0.647% -> warning shown.
+    # Seed 8 (offline): LR price MAPE 0.982% > baseline 0.814% -> warning shown.
     yahoo_mock["frame"] = make_ohlcv(seed=8, tz="America/New_York")
     at = AppTest.from_file(APP)
     at.run()

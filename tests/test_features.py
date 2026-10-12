@@ -11,10 +11,11 @@ def test_rows_up_to_perturbed_row_unchanged(ohlcv):
     bumped.iloc[60, bumped.columns.get_indexer(["Open", "High", "Low", "Close", "Volume"])] *= 2.0
     feats2 = create_features(bumped)
 
-    # Warmup drops the first 20 raw rows, so featured position 40 == raw row 60.
-    assert feats[cols].iloc[:41].fillna(0).equals(feats2[cols].iloc[:41].fillna(0))
+    # Warmup drops the first 50 raw rows (50-day ratio window + t-1 shift),
+    # so featured position 10 == raw row 60.
+    assert feats[cols].iloc[:11].fillna(0).equals(feats2[cols].iloc[:11].fillna(0))
     # ... while later rows legitimately change (history is actually used).
-    assert not feats[cols].iloc[41:].fillna(0).equals(feats2[cols].iloc[41:].fillna(0))
+    assert not feats[cols].iloc[11:].fillna(0).equals(feats2[cols].iloc[11:].fillna(0))
 
 
 def test_last_row_bump_changes_no_feature_value(ohlcv):

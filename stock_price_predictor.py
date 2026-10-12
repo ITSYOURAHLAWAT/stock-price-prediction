@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Shared logic lives in src/ (Phase 1 refactor). This file keeps only CLI code.
 from src.data import fetch_history
@@ -15,7 +16,7 @@ class StockPredictor:
         self.period = period
         self.data = None
         self.models = {}
-        self.scaler = None
+        self.pipelines = {}
         self.feature_cols = None
 
     def fetch_data(self):
@@ -49,62 +50,62 @@ class StockPredictor:
         print("✅ Technical indicators calculated")
 
     def create_features(self):
-        """Create features for machine learning"""
+        """Create features for machine learning (unified scale-free set)."""
         if self.data is None:
             raise ValueError("No data available. Please fetch data first.")
         # Type assertion: after None check, self.data is guaranteed to be a DataFrame
         data = self.data
         assert data is not None, "Data should not be None at this point"
-        # Legacy CLI never computed Close_Std_* — preserve that exactly.
-        feat = _create_features(data, include_close_std=False)
-        # Indicator columns carried over from calculate_technical_indicators()
-        # describe day t (unlike src features); shift them so row t only sees
-        # information up to t-1. (Price_Change is already shifted inside src.)
-        for col in ('MA_20', 'MA_50', 'RSI', 'Volume_MA'):
-            if col in feat.columns:
-                feat[col] = feat[col].shift(1)
-        return feat.dropna()
+        # Display/indicator columns (MA_20/MA_50/RSI/Price_Change/...) are for
+        # charts only: the return model trains exclusively on the unified
+        # scale-free set, so drop them before feature engineering.
+        display_cols = [c for c in ('MA_20', 'MA_50', 'RSI', 'Price_Change',
+                                    'Volume_MA', 'BB_Middle', 'BB_Upper', 'BB_Lower')
+                        if c in data.columns]
+        clean = data.drop(columns=display_cols)
+        return _create_features(clean, include_close_std=False)
 
     def train_models(self):
-        """Train prediction models"""
+        """Train return models (plus baselines) and keep plot/forecast state."""
         if self.data is None:
             print("❌ No data available. Please fetch data first.")
             return
 
         try:
-            models, predictions, metrics, test_index, y_test, feature_cols, baseline = _train_models(
-                self.data, include_close_std=False
-            )
+            res = _train_models(self.data, include_close_std=False)
         except ValueError as e:
             print(f"❌ {e}")
             return
 
-        # Keep a fitted scaler for predict_future (same object the app uses).
-        self.scaler = models['Linear Regression'][1]
-
+        test, metrics, baselines = res['test'], res['metrics'], res['baselines']
         results = {}
 
-        for name in ('Linear Regression', 'Random Forest'):
-            m = metrics[name]
+        for name, m in metrics.items():
             results[name] = {
-                'model': models[name][0],
-                'predictions': predictions[name],
-                'mae': m['MAE'],
-                'mse': m['MSE'],
-                'rmse': m['RMSE'],
-                'r2': m['R²'],
-                'test_dates': test_index,
-                'actual': y_test,
+                'model': res['models'][name],  # fitted Pipeline(StandardScaler, regressor)
+                'predictions': np.asarray(test['pred_close'][name]),
+                'mae': m['price']['MAE'],
+                'mse': m['price']['RMSE'] ** 2,
+                'rmse': m['price']['RMSE'],
+                'r2': m['r2_oos'],
+                'test_dates': test['index'],
+                'actual': test['actual_close'],
             }
 
-            print(f"✅ {name} trained - R²: {m['R²']:.4f}, RMSE: ${m['RMSE']:.2f}")
+            print(f"✅ {name} trained - OOS R²: {m['r2_oos']:.4f}, "
+                  f"price RMSE: ${m['price']['RMSE']:.2f}, "
+                  f"MAPE: {m['price']['MAPE']:.2f}%, dir: {m['dir_acc'] * 100:.1f}%")
 
-        print(f"📏 Naive baseline (prev close) - R²: {baseline['R²']:.4f}, RMSE: ${baseline['RMSE']:.2f}")
+        zb = baselines['zero_return']
+        print(f"📏 Naive baseline (zero return) - price RMSE: ${zb['price']['RMSE']:.2f}, "
+              f"MAPE: {zb['price']['MAPE']:.2f}%, always-up dir: "
+              f"{baselines['always_up_dir_acc'] * 100:.1f}%")
 
         self.models = results
-        # Keep the training feature columns (and the shared fitted scaler) so
+        # Keep the training feature columns (and the fitted pipelines) so
         # predict_future reuses them instead of rebuilding features for names.
-        self.feature_cols = feature_cols
+        self.pipelines = res['models']
+        self.feature_cols = res['feature_cols']
         return results
 
     def plot_results(self):
@@ -167,9 +168,9 @@ class StockPredictor:
             print("❌ No data available.")
             return
 
-        # Use the best performing model
+        # Use the best performing model (price RMSE on the holdout)
         best_model_name = min(self.models.keys(), key=lambda x: self.models[x]['rmse'])
-        best_model = self.models[best_model_name]['model']
+        best_model = self.pipelines[best_model_name]
 
         print(f"🔮 Predicting next {days} days using {best_model_name}:")
 
@@ -184,8 +185,8 @@ class StockPredictor:
 
         current_price = self.data['Close'].iloc[-1]
         predictions = _predict_future(
-            best_model, self.scaler, self.data, feature_cols, days,
-        )
+            best_model, self.data, feature_cols, days,
+        )['close']
 
         for day, pred in enumerate(predictions, start=1):
             change_pct = ((pred - current_price) / current_price) * 100
@@ -211,9 +212,9 @@ class StockPredictor:
         print(f"Average Volume: {self.data['Volume'].mean():,.0f}")
 
         if self.models:
-            print("\n🤖 Model Performance:")
+            print("\n🤖 Model Performance (out-of-sample):")
             for name, results in self.models.items():
-                print(f"{name}: R² = {results['r2']:.4f}, RMSE = ${results['rmse']:.2f}")
+                print(f"{name}: OOS R² = {results['r2']:.4f}, price RMSE = ${results['rmse']:.2f}")
 
 
 def main():

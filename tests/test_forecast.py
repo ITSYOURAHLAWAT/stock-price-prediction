@@ -1,49 +1,48 @@
-"""Forecast: by-name updates, length/finiteness, business-day dates."""
+"""Forecast: by-name updates on simulated returns, length/finiteness."""
 import numpy as np
 import pandas as pd
 import pytest
 
+from src.features import FEATURE_COLS
 from src.forecast import _feature_row, predict_future_prices
+from src.indicators import rsi_last
 from src.models import train_models
-
-FEATURE_COLS = [
-    "Price_Change", "High_Low_Ratio", "Price_Range",
-    "Close_Lag_1", "Close_Lag_2", "Close_Lag_3", "Close_Lag_5",
-    "Volume_Lag_1", "Volume_Lag_2", "Volume_Lag_3", "Volume_Lag_5",
-    "Close_MA_5", "Close_MA_10", "Close_MA_20",
-    "Close_Std_5", "Close_Std_10", "Close_Std_20",
-    "Volume_MA_5", "Volume_MA_10", "Volume_MA_20",
-]
 
 
 def test_feature_row_updates_by_name():
     closes = [float(100 + i) for i in range(60)]  # 100..159
-    volumes = [1000.0] * 60
-    row = dict(zip(FEATURE_COLS, _feature_row(closes, volumes, 1.02, 3.0, FEATURE_COLS)))
+    row = dict(zip(FEATURE_COLS, _feature_row(closes, 1.05, 0.02, FEATURE_COLS)))
 
-    assert row["Close_Lag_1"] == 159.0
-    assert row["Close_Lag_5"] == 155.0
-    assert row["Close_MA_5"] == pytest.approx(157.0)
-    assert row["Price_Change"] == pytest.approx(1 / 158)
-    assert row["Close_Std_5"] == pytest.approx(pd.Series(closes[-5:]).std(ddof=1))
-    assert row["Volume_Lag_3"] == 1000.0  # frozen volume history
+    assert row["Ret_Lag_1"] == pytest.approx(np.log(159 / 158))
+    assert row["Ret_Lag_5"] == pytest.approx(np.log(155 / 154))
+    rets = np.diff(np.log(np.asarray(closes, dtype=float)))
+    assert row["Ret_MA_5"] == pytest.approx(np.mean(rets[-5:]))
+    assert row["Ret_Std_5"] == pytest.approx(np.std(rets[-5:], ddof=1))
+    assert row["Close_MA20_Ratio"] == pytest.approx(159 / np.mean(closes[-20:]) - 1)
+    assert row["RSI_14"] == pytest.approx(rsi_last(closes))
+    assert row["Vol_Ratio"] == 1.05  # frozen observed volume ratio
+    assert row["HL_Pct"] == 0.02  # frozen observed high-low range
 
 
 def test_feature_row_rejects_unknown_features():
     with pytest.raises(ValueError, match="unknown feature"):
-        _feature_row([1.0] * 60, [1.0] * 60, 1.0, 0.0, FEATURE_COLS + ["Mystery"])
+        _feature_row([100.0] * 60, 1.0, 0.01, list(FEATURE_COLS) + ["Mystery"])
 
 
-def test_recursive_forecast_length_finite_and_evolving(ohlcv):
-    models, _, _, _, _, fcols, _ = train_models(ohlcv)
-    model, scaler = models["Linear Regression"]
+def test_recursive_forecast_is_internally_consistent(ohlcv):
+    res = train_models(ohlcv, only="Linear Regression")
+    out = predict_future_prices(res["models"]["Linear Regression"],
+                                ohlcv, res["feature_cols"], 5)
 
-    preds = predict_future_prices(model, scaler, ohlcv, fcols, 5)
-
-    assert len(preds) == 5
-    assert all(np.isfinite(preds))
+    assert set(out) == {"close", "return"}
+    assert len(out["close"]) == 5 and len(out["return"]) == 5
+    assert all(np.isfinite(out["close"])) and all(np.isfinite(out["return"]))
+    # Each close must chain from the previous via its own predicted return.
+    chain = [float(ohlcv["Close"].iloc[-1])] + list(out["close"])
+    for i, r in enumerate(out["return"], start=1):
+        assert chain[i] == pytest.approx(chain[i - 1] * np.exp(r))
     # Inputs are rebuilt every step, so steps must differ on this fixed seed.
-    assert len(set(np.round(preds, 6))) > 1
+    assert len(set(np.round(out["close"], 6))) > 1
 
 
 def test_forecast_dates_are_business_days_only():

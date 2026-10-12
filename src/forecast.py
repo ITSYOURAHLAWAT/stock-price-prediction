@@ -1,75 +1,54 @@
-"""Shared future-price forecasting (recursive, updated by feature NAME).
+"""Shared future forecasting: recursive on log returns, rebuilt by feature NAME.
 
-Each step rebuilds the feature row by name from (history + predictions so
-far): Close-derived features (lags, rolling means/stds, Price_Change, and the
-legacy MA_20/MA_50/RSI/Bollinger columns) are recomputed from the extended
-close series, so no prediction is ever injected into the wrong slot.
+Each step predicts a return from the simulated history, converts it to the
+next close (``last_sim * exp(r_hat)``), appends it, and rebuilds every
+Close-derived feature (lagged returns, rolling return stats, Close/MA ratios,
+RSI) from the extended simulated series.
 
-Known limitation (stated, not hidden): Volume-derived features and
-High/Low-derived features (Volume lags/MAs, High_Low_Ratio, Price_Range) are
-frozen at their last known values because this model does not predict
-Volume/High/Low. The cleaner long-term fix is direct multi-step models (one
-model per horizon) or jointly predicting OHLCV — out of scope for Phase 2.
+Frozen by design (stated, not hidden): Volume-derived features (Vol_Ratio)
+and the high-low feature (HL_Pct) stay at their last OBSERVED values because
+this model does not predict Volume/High/Low. Prediction intervals are added
+in 5c on top of the pooled out-of-sample residuals.
 """
 
 import numpy as np
 import pandas as pd
 
+from .indicators import rsi_last
+
 LAG_FEATURES = [1, 2, 3, 5]
 ROLL_WINDOWS = [5, 10, 20]
 
 
-def _rsi_last(closes):
-    """Last RSI-14 value with the same formula as src.indicators."""
-    s = pd.Series(np.asarray(closes, dtype=float))
-    delta = s.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean().iloc[-1]
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean().iloc[-1]
-    if pd.isna(gain) or pd.isna(loss):
-        return 50.0
-    if gain == 0 and loss == 0:
-        return 50.0
-    if loss == 0:
-        return 100.0
-    rs = gain / loss
-    return float(100 - (100 / (1 + rs)))
+def _feature_row(closes, last_vol_ratio, last_hl_pct, feature_cols):
+    """Build one unscaled feature row (ordered as ``feature_cols``).
 
-
-def _feature_row(closes, volumes, last_hl_ratio, last_range, feature_cols):
-    """Build one unscaled feature row (ordered as ``feature_cols``)."""
+    ``closes`` is history + simulated closes so far; volumes and High/Low
+    stay frozen (see module docstring).
+    """
     row = {}
-    last, prev = closes[-1], closes[-2]
-    row['Price_Change'] = (last - prev) / prev if prev != 0 else 0.0
-    row['High_Low_Ratio'] = last_hl_ratio
-    row['Price_Range'] = last_range
+    logret = np.log(np.asarray(closes, dtype=float))
+    # rets[j] is the log return AT raw index j+1, so rets[-k] is logret[m-k]:
+    # exactly the Ret_Lag_k value row m holds in training.
+    rets = np.diff(logret)  # len(closes) - 1 return observations
+    last = closes[-1]
 
     for lag in LAG_FEATURES:
-        row[f'Close_Lag_{lag}'] = closes[-lag]
-        row[f'Volume_Lag_{lag}'] = volumes[-lag]
+        row[f'Ret_Lag_{lag}'] = rets[-lag]
 
     for window in ROLL_WINDOWS:
-        win = np.asarray(closes[-window:], dtype=float)
-        row[f'Close_MA_{window}'] = float(np.mean(win))
-        if f'Close_Std_{window}' in feature_cols:
-            row[f'Close_Std_{window}'] = float(np.std(win, ddof=1))
-        row[f'Volume_MA_{window}'] = float(np.mean(np.asarray(volumes[-window:], dtype=float)))
+        win = rets[-window:]
+        row[f'Ret_MA_{window}'] = float(np.mean(win))
+        if f'Ret_Std_{window}' in feature_cols:
+            row[f'Ret_Std_{window}'] = float(np.std(win, ddof=1))
 
-    # Legacy indicator columns (present in the CLI feature set).
-    hist20 = np.asarray(closes[-20:], dtype=float)
-    if 'MA_20' in feature_cols:
-        row['MA_20'] = float(np.mean(hist20))
-    if 'MA_50' in feature_cols:
-        row['MA_50'] = float(np.mean(np.asarray(closes[-50:], dtype=float)))
-    if 'Volume_MA' in feature_cols:
-        row['Volume_MA'] = float(np.mean(np.asarray(volumes[-20:], dtype=float)))
-    if 'RSI' in feature_cols:
-        row['RSI'] = _rsi_last(closes)
-    if 'BB_Middle' in feature_cols or 'BB_Upper' in feature_cols or 'BB_Lower' in feature_cols:
-        middle = float(np.mean(hist20))
-        std = float(np.std(hist20, ddof=1))
-        row['BB_Middle'] = middle
-        row['BB_Upper'] = middle + std * 2
-        row['BB_Lower'] = middle - std * 2
+    ma20 = float(np.mean(np.asarray(closes[-20:], dtype=float)))
+    ma50 = float(np.mean(np.asarray(closes[-50:], dtype=float)))
+    row['Close_MA20_Ratio'] = last / ma20 - 1 if ma20 != 0 else 0.0
+    row['Close_MA50_Ratio'] = last / ma50 - 1 if ma50 != 0 else 0.0
+    row['RSI_14'] = rsi_last(closes)
+    row['Vol_Ratio'] = last_vol_ratio
+    row['HL_Pct'] = last_hl_pct
 
     missing = [c for c in feature_cols if c not in row]
     if missing:
@@ -77,27 +56,40 @@ def _feature_row(closes, volumes, last_hl_ratio, last_range, feature_cols):
             f"Cannot recursively update unknown feature(s): {missing}. "
             "Extend _feature_row or switch to direct multi-step forecasting."
         )
-    return [row[c] for c in feature_cols]
+    ordered = [row[c] for c in feature_cols]
+    if any(not np.isfinite(v) for v in ordered):
+        raise ValueError("Non-finite feature value during recursive forecasting.")
+    return ordered
 
 
-def predict_future_prices(model, scaler, data, feature_cols, days):
-    """Predict future stock prices (recursive, business-day-agnostic values).
+def _last_observed_ratios(data):
+    """Frozen volume / high-low inputs from the last observed row."""
+    last = data.iloc[-1]
+    vol_ma20 = float(data['Volume'].rolling(window=20).mean().iloc[-1])
+    vol = float(last['Volume'])
+    vol_ratio = vol / vol_ma20 if vol_ma20 != 0 else 1.0
+    close = float(last['Close'])
+    hl_pct = float((last['High'] - last['Low']) / close) if close != 0 else 0.0
+    return vol_ratio, hl_pct
 
-    Returns a list of ``days`` predicted closes. Callers generate the
-    corresponding business-day dates (``freq='B'``).
+
+def predict_future_prices(model, data, feature_cols, days):
+    """Recursive return forecast.
+
+    ``model`` is a fitted ``Pipeline(StandardScaler, regressor)`` predicting
+    log returns. Returns ``{'close': [...], 'return': [...]}`` — lists of
+    ``days`` simulated closes and the predicted returns behind them.
     """
     closes = [float(x) for x in data['Close'].tolist()]
-    volumes = [float(x) for x in data['Volume'].tolist()]
-    last = data.iloc[-1]
-    last_low = float(last['Low'])
-    last_hl_ratio = float(last['High'] / last['Low']) if last_low != 0 else 1.0
-    last_range = float(last['High'] - last['Low'])
+    last_vol_ratio, last_hl_pct = _last_observed_ratios(data)
 
-    future_predictions = []
+    pred_closes, pred_rets = [], []
     for _ in range(days):
-        row = _feature_row(closes + future_predictions, volumes,
-                           last_hl_ratio, last_range, feature_cols)
-        pred = float(model.predict(scaler.transform([row]))[0])
-        future_predictions.append(pred)
+        row = _feature_row(closes + pred_closes, last_vol_ratio, last_hl_pct, feature_cols)
+        r_hat = float(model.predict(pd.DataFrame([row], columns=feature_cols))[0])
+        if not np.isfinite(r_hat):
+            raise ValueError("Model predicted a non-finite return during forecasting.")
+        pred_rets.append(r_hat)
+        pred_closes.append((closes + pred_closes)[-1] * float(np.exp(r_hat)))
 
-    return future_predictions
+    return {'close': pred_closes, 'return': pred_rets}
