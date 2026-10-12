@@ -1,19 +1,17 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.preprocessing import StandardScaler
-from datetime import date, datetime
+from datetime import date
 import warnings
 warnings.filterwarnings('ignore')
 
-# This is your updated app.py file
+# Shared logic lives in src/ (Phase 1 refactor). This file keeps only UI code.
+from src.data import fetch_stock_data as _fetch_stock_data
+from src.indicators import calculate_technical_indicators
+from src.models import train_models
+from src.forecast import predict_future_prices
 
 # Page configuration
 st.set_page_config(
@@ -73,210 +71,13 @@ prediction_days = st.sidebar.slider("Days to predict:", 1, 30, 7)
 show_indicators = st.sidebar.checkbox("Show Technical Indicators", True)
 
 def fetch_stock_data(ticker, start, end):
-    """Fetch stock data with error handling"""
-    try:
-        stock = yf.Ticker(ticker)
-        
-        # Try using period first (more reliable)
-        try:
-            # Calculate period from dates
-            if isinstance(start, date):
-                start_dt = datetime.combine(start, datetime.min.time())
-            else:
-                start_dt = start
-            
-            if isinstance(end, date):
-                end_dt = datetime.combine(end, datetime.max.time())
-            else:
-                end_dt = end
-            
-            days_diff = (end_dt - start_dt).days
-            
-            # Use period if reasonable, otherwise use start/end
-            if days_diff <= 730:  # 2 years
-                if days_diff <= 5:
-                    period = "5d"
-                elif days_diff <= 30:
-                    period = "1mo"
-                elif days_diff <= 90:
-                    period = "3mo"
-                elif days_diff <= 180:
-                    period = "6mo"
-                elif days_diff <= 365:
-                    period = "1y"
-                else:
-                    period = "2y"
-                
-                data = stock.history(period=period)
-            else:
-                # For longer periods, use start/end dates
-                data = stock.history(start=start, end=end)
-        except:
-            # Fallback to start/end dates
-            data = stock.history(start=start, end=end)
-        
-        if data.empty or len(data) == 0:
-            # Try alternative method with period
-            st.warning(f"Trying alternative method to fetch data for {ticker}...")
-            data = stock.history(period="1y")
-            
-            if data.empty or len(data) == 0:
-                st.error(f"❌ No data found for ticker '{ticker}'. Please check:")
-                st.error("1. The ticker symbol is correct (e.g., AAPL, GOOGL, MSFT)")
-                st.error("2. Your internet connection is working")
-                st.error("3. Yahoo Finance API is accessible")
-                return None
-        
-        # Filter by date range if needed
-        if not data.empty and isinstance(start, date) and isinstance(end, date):
-            # Convert date to datetime for comparison
-            start_dt = datetime.combine(start, datetime.min.time())
-            end_dt = datetime.combine(end, datetime.max.time())
-            data = data[(data.index >= start_dt) & (data.index <= end_dt)]
-            if data.empty:
-                st.warning(f"⚠️ No data in selected date range. Showing available data.")
-                data = stock.history(period="1y")
-            
-        return data
-    except Exception as e:
-        st.error(f"❌ Error fetching data: {str(e)}")
-        st.error("This might be due to:")
-        st.error("• Internet connection issues")
-        st.error("• Yahoo Finance API temporarily unavailable")
-        st.error("• Invalid ticker symbol")
-        st.exception(e)  # Show full error for debugging
-        return None
-
-def calculate_technical_indicators(data):
-    """Calculate technical indicators"""
-    df = data.copy()
-    
-    # Moving averages
-    df['MA_20'] = df['Close'].rolling(window=20).mean()
-    df['MA_50'] = df['Close'].rolling(window=50).mean()
-    
-    # RSI
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    # Bollinger Bands
-    df['BB_Middle'] = df['Close'].rolling(window=20).mean()
-    bb_std = df['Close'].rolling(window=20).std()
-    df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
-    df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
-    
-    # Volume moving average
-    df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
-    
-    return df
-
-def create_features(data):
-    """Create features for machine learning"""
-    df = data.copy()
-    
-    # Price-based features
-    df['Price_Change'] = df['Close'].pct_change()
-    df['High_Low_Ratio'] = df['High'] / df['Low']
-    df['Price_Range'] = df['High'] - df['Low']
-    
-    # Lagged features
-    for lag in [1, 2, 3, 5]:
-        df[f'Close_Lag_{lag}'] = df['Close'].shift(lag)
-        df[f'Volume_Lag_{lag}'] = df['Volume'].shift(lag)
-    
-    # Rolling statistics
-    for window in [5, 10, 20]:
-        df[f'Close_MA_{window}'] = df['Close'].rolling(window=window).mean()
-        df[f'Close_Std_{window}'] = df['Close'].rolling(window=window).std()
-        df[f'Volume_MA_{window}'] = df['Volume'].rolling(window=window).mean()
-    
-    # Remove rows with NaN values
-    df = df.dropna()
-    
-    return df
-
-def train_models(data):
-    """Train prediction models"""
-    # Create features
-    featured_data = create_features(data)
-    
-    # Select feature columns (exclude date and target)
-    feature_cols = [col for col in featured_data.columns if col not in ['Close', 'Open', 'High', 'Low', 'Volume', 'Dividends', 'Stock Splits']]
-    
-    X = featured_data[feature_cols]
-    y = featured_data['Close']
-    
-    # Split data (80% train, 20% test)
-    split_idx = int(len(X) * 0.8)
-    X_train, X_test = X[:split_idx], X[split_idx:]
-    y_train, y_test = y[:split_idx], y[split_idx:]
-    
-    # Scale features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    models = {}
-    predictions = {}
-    metrics = {}
-    
-    # Linear Regression
-    lr_model = LinearRegression()
-    lr_model.fit(X_train_scaled, y_train)
-    lr_pred = lr_model.predict(X_test_scaled)
-    
-    models['Linear Regression'] = (lr_model, scaler)
-    predictions['Linear Regression'] = lr_pred
-    metrics['Linear Regression'] = calculate_metrics(y_test, lr_pred)
-    
-    # Random Forest
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    rf_model.fit(X_train_scaled, y_train)
-    rf_pred = rf_model.predict(X_test_scaled)
-    
-    models['Random Forest'] = (rf_model, scaler)
-    predictions['Random Forest'] = rf_pred
-    metrics['Random Forest'] = calculate_metrics(y_test, rf_pred)
-    
-    return models, predictions, metrics, X_test.index, y_test, feature_cols
-
-def calculate_metrics(y_true, y_pred):
-    """Calculate model performance metrics"""
-    mae = mean_absolute_error(y_true, y_pred)
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_true, y_pred)
-    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-    
-    return {
-        'MAE': mae,
-        'MSE': mse,
-        'RMSE': rmse,
-        'R²': r2,
-        'MAPE': mape
-    }
-
-def predict_future_prices(model, scaler, data, feature_cols, days):
-    """Predict future stock prices"""
-    featured_data = create_features(data)
-    last_features = featured_data[feature_cols].iloc[-1:].values
-    last_features_scaled = scaler.transform(last_features)
-    
-    future_predictions = []
-    current_features = last_features_scaled.copy()
-    
-    for _ in range(days):
-        pred = model.predict(current_features)[0]
-        future_predictions.append(pred)
-        
-        # Update features for next prediction (simplified approach)
-        # In practice, you'd want to update all features properly
-        current_features[0, 0] = pred  # Assuming first feature is most recent close price
-    
-    return future_predictions
+    """Fetch stock data with error handling (thin wrapper over src.data)."""
+    return _fetch_stock_data(
+        ticker, start, end,
+        on_warning=st.warning,
+        on_error=st.error,
+        on_exception=st.exception,
+    )
 
 # Main app logic
 # Show instructions if no analysis has been run

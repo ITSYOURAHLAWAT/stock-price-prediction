@@ -62,9 +62,15 @@ python stock_price_predictor.py
 
 ```
 Stock-Price-Predictor/
-├── app.py                      # Main Streamlit web application
-├── stock_price_predictor.py    # Standalone command-line version
-├── requirements.txt            # Python dependencies
+├── app.py                      # Streamlit web application (thin UI wrapper)
+├── stock_price_predictor.py    # Standalone command-line version (thin CLI wrapper)
+├── src/                        # Shared logic imported by both entry points
+│   ├── data.py                 # Yahoo Finance fetching
+│   ├── indicators.py           # Technical indicators (MA, RSI, Bollinger Bands)
+│   ├── features.py             # Feature engineering for ML
+│   ├── models.py               # Model training + metrics
+│   └── forecast.py             # Future price forecasting
+├── requirements.txt            # Python dependencies (pinned)
 └── README.md                  # Project documentation
 ```
 
@@ -135,7 +141,8 @@ The application provides comprehensive model evaluation:
 
 ## 📜 License
 
-This project is open source and available under the [MIT License](LICENSE).
+No license file yet — the previous link to `LICENSE` was removed because the
+file does not exist. Tell us which license you want (e.g. MIT) and it will be added.
 
 ## 🎯 Future Enhancements
 
