@@ -1,4 +1,5 @@
 """Forecast: by-name updates on simulated returns, length/finiteness."""
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,7 +12,7 @@ from src.models import train_models
 
 def test_feature_row_updates_by_name():
     closes = [float(100 + i) for i in range(60)]  # 100..159
-    row = dict(zip(FEATURE_COLS, _feature_row(closes, 1.05, 0.02, FEATURE_COLS)))
+    row = dict(zip(FEATURE_COLS, _feature_row(closes, 1.05, 0.02, FEATURE_COLS), strict=True))
 
     assert row["Ret_Lag_1"] == pytest.approx(np.log(159 / 158))
     assert row["Ret_Lag_5"] == pytest.approx(np.log(155 / 154))
@@ -31,8 +32,7 @@ def test_feature_row_rejects_unknown_features():
 
 def test_recursive_forecast_is_internally_consistent(ohlcv):
     res = train_models(ohlcv, only="Linear Regression")
-    out = predict_future_prices(res["models"]["Linear Regression"],
-                                ohlcv, res["feature_cols"], 5)
+    out = predict_future_prices(res["models"]["Linear Regression"], ohlcv, res["feature_cols"], 5)
 
     assert set(out) == {"close", "return"}
     assert len(out["close"]) == 5 and len(out["return"]) == 5
@@ -46,11 +46,15 @@ def test_recursive_forecast_is_internally_consistent(ohlcv):
 
 
 def test_forecast_dates_are_business_days_only():
-    dates = pd.date_range(start=pd.Timestamp("2026-01-02") + pd.Timedelta(days=1),
-                          periods=10, freq="B")
+    dates = pd.date_range(
+        start=pd.Timestamp("2026-01-02") + pd.Timedelta(days=1), periods=10, freq="B"
+    )
     assert len(dates) == 10
-    assert (dates.weekday < 5).all()
-    assert dates[0].weekday() == 0  # Friday -> Monday
+    # (Timestamp.weekday(); DatetimeIndex component accessors are generated
+    # dynamically and invisible to static type checkers.)
+    weekdays = [d.weekday() for d in dates]
+    assert all(wd < 5 for wd in weekdays)
+    assert weekdays[0] == 0  # Friday -> Monday
 
 
 def test_interval_ordering_and_growth(ohlcv):
@@ -58,10 +62,10 @@ def test_interval_ordering_and_growth(ohlcv):
     pipe = res["models"]["Linear Regression"]
     out = predict_future_prices(pipe, ohlcv, res["feature_cols"], 7)
     last = float(ohlcv["Close"].iloc[-1])
-    lower, upper = prediction_intervals(
-        out["return"], res["residuals"]["Linear Regression"], last)
+    lower, upper = prediction_intervals(out["return"], res["residuals"]["Linear Regression"], last)
 
     assert len(lower) == len(upper) == 7
-    assert all(lo <= p <= hi for lo, p, hi in zip(lower, out["close"], upper))
-    widths = [hi - lo for lo, hi in zip(lower, upper)]
-    assert all(b > a for a, b in zip(widths, widths[1:]))  # band widens with h
+    assert all(lo <= p <= hi for lo, p, hi in zip(lower, out["close"], upper, strict=True))
+    widths = [hi - lo for lo, hi in zip(lower, upper, strict=True)]
+    # consecutive-pairs idiom needs unequal lengths by construction
+    assert all(b > a for a, b in zip(widths, widths[1:]))  # noqa: B905  # band widens with h

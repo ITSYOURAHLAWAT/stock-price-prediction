@@ -7,6 +7,7 @@ closes, so models stay comparable with the naive baseline).
 """
 
 import numpy as np
+import pandas as pd
 from sklearn.base import clone
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
@@ -15,7 +16,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .features import TARGET_COL, FEATURE_COLS, create_features, reconstruct_close
+from .features import FEATURE_COLS, TARGET_COL, VectorLike, create_features, reconstruct_close
 
 # Minimum usable rows after feature engineering (covers the 50-day window
 # plus the t-1 shift, with margin for a meaningful train/test split).
@@ -27,14 +28,17 @@ WF_GAP = 1
 
 # Fixed, modest estimators — deliberately NOT tuned (no search in this repo).
 MODEL_SPECS = [
-    ('Linear Regression', LinearRegression()),
-    ('Random Forest', RandomForestRegressor(
-        n_estimators=200, min_samples_leaf=5, max_depth=6,
-        random_state=42, n_jobs=-1)),
+    ("Linear Regression", LinearRegression()),
+    (
+        "Random Forest",
+        RandomForestRegressor(
+            n_estimators=200, min_samples_leaf=5, max_depth=6, random_state=42, n_jobs=-1
+        ),
+    ),
 ]
 
 
-def get_feature_columns(featured_data):
+def get_feature_columns(featured_data: pd.DataFrame) -> list[str]:
     """Return the scale-free feature list, failing fast if any is missing."""
     missing = [c for c in FEATURE_COLS if c not in featured_data.columns]
     if missing:
@@ -42,53 +46,56 @@ def get_feature_columns(featured_data):
     return list(FEATURE_COLS)
 
 
-def return_metrics(y_true, y_pred):
+def return_metrics(y_true: VectorLike, y_pred: VectorLike) -> dict[str, float]:
     """MAE/RMSE on log returns."""
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     return {
-        'MAE': float(mean_absolute_error(y_true, y_pred)),
-        'RMSE': float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "MAE": float(mean_absolute_error(y_true, y_pred)),
+        "RMSE": float(np.sqrt(mean_squared_error(y_true, y_pred))),
     }
 
 
-def price_metrics(y_true, y_pred):
+def price_metrics(y_true: VectorLike, y_pred: VectorLike) -> dict[str, float]:
     """MAE/RMSE + zero-safe MAPE on reconstructed prices."""
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     valid = y_true != 0
-    mape = float(np.mean(np.abs((y_true[valid] - y_pred[valid]) / y_true[valid])) * 100) \
-        if np.any(valid) else float('nan')
+    mape = (
+        float(np.mean(np.abs((y_true[valid] - y_pred[valid]) / y_true[valid])) * 100)
+        if np.any(valid)
+        else float("nan")
+    )
     return {
-        'MAE': float(mean_absolute_error(y_true, y_pred)),
-        'RMSE': float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        'MAPE': mape,
+        "MAE": float(mean_absolute_error(y_true, y_pred)),
+        "RMSE": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "MAPE": mape,
     }
 
 
-def directional_accuracy(actual_ret, pred_ret):
+def directional_accuracy(actual_ret: VectorLike, pred_ret: VectorLike) -> float:
     """Share of days where sign(predicted return) == sign(actual return)."""
     actual_ret = np.asarray(actual_ret, dtype=float)
     pred_ret = np.asarray(pred_ret, dtype=float)
     if len(actual_ret) == 0:
-        return float('nan')
+        return float("nan")
     return float(np.mean(np.sign(pred_ret) == np.sign(actual_ret)))
 
 
-def r2_vs_zero(actual_ret, pred_ret):
+def r2_vs_zero(actual_ret: VectorLike, pred_ret: VectorLike) -> float:
     """Out-of-sample R² against the zero-return baseline: 1 - SSE/SSE_naive.
 
     Negative means worse than predicting zero every day.
     """
     actual_ret = np.asarray(actual_ret, dtype=float)
     pred_ret = np.asarray(pred_ret, dtype=float)
-    sse_naive = float(np.sum(actual_ret ** 2))
+    sse_naive = float(np.sum(actual_ret**2))
     if sse_naive == 0:
-        return float('nan')
+        return float("nan")
     return float(1 - np.sum((actual_ret - pred_ret) ** 2) / sse_naive)
 
 
-def beats_baseline(r2_oos, model_price_rmse, naive_price_rmse):
+def beats_baseline(r2_oos: float, model_price_rmse: float, naive_price_rmse: float) -> bool:
     """Verdict: beats the baseline only if BOTH hold (never one alone).
 
     - pooled return-space OOS R² > 0, AND
@@ -104,12 +111,14 @@ def beats_baseline(r2_oos, model_price_rmse, naive_price_rmse):
         return False
 
 
-def baseline_warning_text(model_name, model_mape, baseline_mape):
+def baseline_warning_text(model_name: str, model_mape: float, baseline_mape: float) -> str | None:
     """Warning text when a forecast loses to the naive baseline, else None."""
     if model_mape > baseline_mape:
-        return (f"⚠️ The {model_name} forecast (MAPE {model_mape:.2f}%) does not beat "
-                f"the naive baseline (MAPE {baseline_mape:.2f}%). Treat it with extra "
-                "skepticism — past patterns alone aren't predicting this series.")
+        return (
+            f"⚠️ The {model_name} forecast (MAPE {model_mape:.2f}%) does not beat "
+            f"the naive baseline (MAPE {baseline_mape:.2f}%). Treat it with extra "
+            "skepticism — past patterns alone aren't predicting this series."
+        )
     return None
 
 
@@ -117,18 +126,18 @@ def _evaluate_block(actual_ret, prev_close, actual_close, pred_ret):
     """Metric bundle for one out-of-sample block (fold or pooled)."""
     pred_close = reconstruct_close(prev_close, pred_ret)
     return {
-        'n': int(len(actual_ret)),
-        'return': return_metrics(actual_ret, pred_ret),
-        'price': price_metrics(actual_close, pred_close),
-        'dir_acc': directional_accuracy(actual_ret, pred_ret),
-        'r2_oos': r2_vs_zero(actual_ret, pred_ret),
+        "n": int(len(actual_ret)),
+        "return": return_metrics(actual_ret, pred_ret),
+        "price": price_metrics(actual_close, pred_close),
+        "dir_acc": directional_accuracy(actual_ret, pred_ret),
+        "r2_oos": r2_vs_zero(actual_ret, pred_ret),
     }
 
 
 def _resolve_wanted(only):
-    if only in (None, 'Both (Comparison)'):
+    if only in (None, "Both (Comparison)"):
         return [name for name, _ in MODEL_SPECS]
-    if only in ('Linear Regression', 'Random Forest'):
+    if only in ("Linear Regression", "Random Forest"):
         return [only]
     raise ValueError(f"Unknown model selection: {only!r}")
 
@@ -139,13 +148,13 @@ def _fit_pipelines(X_train, y_train, wanted):
     for name, estimator in MODEL_SPECS:
         if name not in wanted:
             continue
-        pipe = Pipeline([('scaler', StandardScaler()), ('model', clone(estimator))])
+        pipe = Pipeline([("scaler", StandardScaler()), ("model", clone(estimator))])
         pipe.fit(X_train, y_train)
         fitted[name] = pipe
     return fitted
 
 
-def train_models(data, only=None):
+def train_models(data: pd.DataFrame, only: str | None = None) -> dict:
     """Train return models with walk-forward validation.
 
     ``only`` selects
@@ -187,8 +196,8 @@ def train_models(data, only=None):
     feature_cols = get_feature_columns(featured)
     X = featured[feature_cols]
     y = featured[TARGET_COL]
-    prev_close = featured['Close'].shift(1).loc[X.index]
-    actual_close = featured['Close'].loc[X.index]
+    prev_close = featured["Close"].shift(1).loc[X.index]
+    actual_close = featured["Close"].loc[X.index]
 
     wanted = _resolve_wanted(only)
 
@@ -210,73 +219,74 @@ def train_models(data, only=None):
                 np.asarray(y_test, dtype=float),
                 np.asarray(prev_close.loc[test_idx], dtype=float),
                 np.asarray(actual_close.loc[test_idx], dtype=float),
-                pred_ret)
-            block['train_size'] = int(len(train_pos))
-            block['test_start_pos'] = int(test_pos[0])
-            block['train_end_pos'] = int(train_pos[-1])
+                pred_ret,
+            )
+            block["train_size"] = int(len(train_pos))
+            block["test_start_pos"] = int(test_pos[0])
+            block["train_end_pos"] = int(train_pos[-1])
             fold_blocks[name].append(block)
 
     # Pooled out-of-sample series (folds are chronological and disjoint).
     pooled_index = pooled_idx[0].append(pooled_idx[1:])
     test_block = {
-        'index': pooled_index,
-        'prev_close': prev_close.loc[pooled_index],
-        'actual_ret': y.loc[pooled_index],
-        'actual_close': actual_close.loc[pooled_index],
-        'pred_ret': {},
-        'pred_close': {},
+        "index": pooled_index,
+        "prev_close": prev_close.loc[pooled_index],
+        "actual_ret": y.loc[pooled_index],
+        "actual_close": actual_close.loc[pooled_index],
+        "pred_ret": {},
+        "pred_close": {},
     }
     metrics = {}
     residuals = {}
     for name in wanted:
         concat_ret = np.concatenate([pred for _, pred in fold_pred_ret[name]])
-        test_block['pred_ret'][name] = concat_ret
-        test_block['pred_close'][name] = reconstruct_close(
-            test_block['prev_close'], concat_ret)
+        test_block["pred_ret"][name] = concat_ret
+        test_block["pred_close"][name] = reconstruct_close(test_block["prev_close"], concat_ret)
         pooled = _evaluate_block(
-            np.asarray(test_block['actual_ret'], dtype=float),
-            np.asarray(test_block['prev_close'], dtype=float),
-            np.asarray(test_block['actual_close'], dtype=float),
-            concat_ret)
-        pooled['folds'] = fold_blocks[name]
+            np.asarray(test_block["actual_ret"], dtype=float),
+            np.asarray(test_block["prev_close"], dtype=float),
+            np.asarray(test_block["actual_close"], dtype=float),
+            concat_ret,
+        )
+        pooled["folds"] = fold_blocks[name]
         metrics[name] = {
-            'return': pooled['return'],
-            'price': pooled['price'],
-            'dir_acc': pooled['dir_acc'],
-            'r2_oos': pooled['r2_oos'],
-            'folds': fold_blocks[name],
+            "return": pooled["return"],
+            "price": pooled["price"],
+            "dir_acc": pooled["dir_acc"],
+            "r2_oos": pooled["r2_oos"],
+            "folds": fold_blocks[name],
         }
-        residuals[name] = (concat_ret
-                           - np.asarray(test_block['actual_ret'], dtype=float))
+        residuals[name] = concat_ret - np.asarray(test_block["actual_ret"], dtype=float)
 
     zero_ret = np.zeros(len(pooled_index))
-    naive_price = reconstruct_close(test_block['prev_close'], zero_ret)
+    naive_price = reconstruct_close(test_block["prev_close"], zero_ret)
     baselines = {
-        'zero_return': {
-            'return': return_metrics(test_block['actual_ret'], zero_ret),
-            'price': price_metrics(test_block['actual_close'], naive_price),
+        "zero_return": {
+            "return": return_metrics(test_block["actual_ret"], zero_ret),
+            "price": price_metrics(test_block["actual_close"], naive_price),
         },
-        'always_up_dir_acc': float(
-            np.mean(np.asarray(test_block['actual_ret'], dtype=float) > 0)),
+        "always_up_dir_acc": float(np.mean(np.asarray(test_block["actual_ret"], dtype=float) > 0)),
     }
 
     # Final models refit on ALL available data (used for forecasting).
     final_models = _fit_pipelines(X, y, wanted)
 
     verdict = {
-        name: beats_baseline(metrics[name]['r2_oos'],
-                             metrics[name]['price']['RMSE'],
-                             baselines['zero_return']['price']['RMSE'])
+        name: beats_baseline(
+            metrics[name]["r2_oos"],
+            metrics[name]["price"]["RMSE"],
+            baselines["zero_return"]["price"]["RMSE"],
+        )
         for name in wanted
     }
 
     return {
-        'feature_cols': feature_cols,
-        'target_col': TARGET_COL,
-        'models': final_models,
-        'test': test_block,
-        'metrics': metrics,
-        'baselines': baselines,
-        'residuals': residuals,
-        'verdict': verdict,
+        "feature_cols": feature_cols,
+        "target_col": TARGET_COL,
+        "models": final_models,
+        "test": test_block,
+        "metrics": metrics,
+        "baselines": baselines,
+        "residuals": residuals,
+        "verdict": verdict,
     }

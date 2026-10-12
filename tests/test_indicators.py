@@ -1,4 +1,5 @@
 """Indicator values on small known series (no randomness)."""
+
 import warnings
 
 import numpy as np
@@ -11,10 +12,16 @@ def _frame(closes, volume=1000.0):
     closes = np.asarray(closes, dtype=float)
     n = len(closes)
     idx = pd.date_range("2024-01-01", periods=n, freq="B")
-    return pd.DataFrame({
-        "Open": closes, "High": closes + 1, "Low": closes - 1,
-        "Close": closes, "Volume": np.full(n, volume),
-    }, index=idx)
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes + 1,
+            "Low": closes - 1,
+            "Close": closes,
+            "Volume": np.full(n, volume),
+        },
+        index=idx,
+    )
 
 
 def test_moving_averages_on_constant_series():

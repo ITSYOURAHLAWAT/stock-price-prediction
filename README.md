@@ -157,6 +157,20 @@ The application evaluates models pooled out-of-sample over 5 walk-forward folds:
 - The **naive zero-return baseline is the benchmark to beat** — on noisy data
   it is often the best "model" in the table, and that is informative.
 
+## 🛠️ Development
+
+```bash
+pip install -r requirements-dev.txt  # pytest + ruff (pinned)
+pytest -q                            # offline suite, Yahoo Finance mocked
+ruff check .                         # lint (rules E, F, I, B, UP; line length 100)
+ruff format --check .                # formatting gate
+```
+
+CI (`.github/workflows/ci.yml`) runs on push and pull requests with a
+Python 3.10/3.11 matrix: install → `ruff check` → `ruff format --check` →
+`pytest -q`. Type checking is Pyright in basic mode over `src/` and `tests/`
+(`pyright src tests`).
+
 ## 🚨 Disclaimer
 
 **Important**: This application is for educational and research purposes only. It is NOT financial advice. Stock market investments carry risk, and past performance does not guarantee future results. Always consult with qualified financial advisors before making investment decisions.

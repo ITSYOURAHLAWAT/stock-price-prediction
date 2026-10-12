@@ -1,9 +1,18 @@
 """Walk-forward validation structure (chronology, gaps, scaler discipline)."""
+
 import numpy as np
 from sklearn.model_selection import TimeSeriesSplit
 
-from src.features import create_features, TARGET_COL
-from src.models import N_SPLITS, WF_GAP, beats_baseline, directional_accuracy, get_feature_columns, r2_vs_zero, train_models
+from src.features import TARGET_COL, create_features
+from src.models import (
+    N_SPLITS,
+    WF_GAP,
+    beats_baseline,
+    directional_accuracy,
+    get_feature_columns,
+    r2_vs_zero,
+    train_models,
+)
 
 
 def test_five_folds_with_gap_and_disjoint_chronological_tests(ohlcv):
@@ -23,13 +32,13 @@ def test_five_folds_with_gap_and_disjoint_chronological_tests(ohlcv):
     expected = list(splitter.split(featured))
     assert len(expected) == N_SPLITS
     offset = 0
-    for (train_pos, test_pos), block in zip(expected, folds):
+    for (train_pos, test_pos), block in zip(expected, folds, strict=True):
         # Gap respected: exactly WF_GAP excluded index/indices sit between the
         # last train row and the first test row (test_start - train_last == 2).
         assert test_pos[0] - train_pos[-1] == WF_GAP + 1
         # Fold covers the matching pooled slice.
         assert block["n"] == len(test_pos)
-        sl = pooled_index[offset:offset + len(test_pos)]
+        sl = pooled_index[offset : offset + len(test_pos)]
         assert (sl == featured.index[test_pos]).all()
         offset += len(test_pos)
 
@@ -43,9 +52,11 @@ def test_scaler_fit_on_train_fold_only(ohlcv):
 
     # Refit one fold manually and compare scaler statistics.
     from src.models import _fit_pipelines
-    for train_pos, test_pos in splitter.split(X):
-        fitted = _fit_pipelines(X.iloc[train_pos], featured[TARGET_COL].iloc[train_pos],
-                                ["Linear Regression"])
+
+    for train_pos, _test_pos in splitter.split(X):
+        fitted = _fit_pipelines(
+            X.iloc[train_pos], featured[TARGET_COL].iloc[train_pos], ["Linear Regression"]
+        )
         scaler = fitted["Linear Regression"].named_steps["scaler"]
         np.testing.assert_allclose(scaler.mean_, X.iloc[train_pos].mean().to_numpy())
         np.testing.assert_allclose(scaler.scale_, X.iloc[train_pos].std(ddof=0).to_numpy())
@@ -76,8 +87,8 @@ def test_pooled_metrics_match_concatenated_oos(ohlcv):
 
 def test_verdict_truth_table():
     assert beats_baseline(0.05, 1.0, 1.5) is True
-    assert beats_baseline(-0.01, 1.0, 1.5) is False   # R² alone is not a win
-    assert beats_baseline(0.05, 2.0, 1.5) is False    # RMSE alone is not a win
+    assert beats_baseline(-0.01, 1.0, 1.5) is False  # R² alone is not a win
+    assert beats_baseline(0.05, 2.0, 1.5) is False  # RMSE alone is not a win
     assert beats_baseline(float("nan"), 1.0, 1.5) is False
     assert beats_baseline(0.05, float("nan"), 1.5) is False
 

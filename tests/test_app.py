@@ -3,14 +3,13 @@
 Caches are global, so every test uses a distinct ticker AND the
 ``clean_caches`` fixture. All data uses fixed seeds — no flakiness by design.
 """
-import numpy as np
-import pandas as pd
-import pytest
+
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-import yfinance
 import src.models as models_mod
 from src.forecast import predict_future_prices
 from src.models import train_models
@@ -89,8 +88,11 @@ def test_forecast_uses_selected_model(clean_caches, yahoo_mock):
     at.run()
     _run_analysis(at, "TSTFC", model="Linear Regression", days=7)
 
-    expected = np.array(predict_future_prices(res["models"]["Linear Regression"],
-                                              frame, res["feature_cols"], 7)["close"])
+    expected = np.array(
+        predict_future_prices(res["models"]["Linear Regression"], frame, res["feature_cols"], 7)[
+            "close"
+        ]
+    )
     got, tbl = _future_prices(at)
     assert np.allclose(got, np.round(expected, 2), atol=0.01)
     assert (pd.to_datetime(tbl["Date"]).dt.weekday < 5).all()  # business days only

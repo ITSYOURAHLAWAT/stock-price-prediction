@@ -3,6 +3,7 @@
 All randomness uses fixed seeds, and every sklearn model in ``src`` uses a
 fixed ``random_state``, so the suite is fully deterministic.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -17,13 +18,16 @@ def make_ohlcv(seed=11, n=150, drift=0.1, vol=1.2, tz=None):
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2023-01-02", periods=n, freq="B", tz=tz)
     close = 100 + np.cumsum(rng.normal(drift, vol, n))
-    return pd.DataFrame({
-        "Open": close + rng.normal(0, 0.2, n),
-        "High": close + np.abs(rng.normal(0.4, 0.3, n)),
-        "Low": close - np.abs(rng.normal(0.4, 0.3, n)),
-        "Close": close,
-        "Volume": rng.integers(1_000_000, 4_000_000, n).astype(float),
-    }, index=idx)
+    return pd.DataFrame(
+        {
+            "Open": close + rng.normal(0, 0.2, n),
+            "High": close + np.abs(rng.normal(0.4, 0.3, n)),
+            "Low": close - np.abs(rng.normal(0.4, 0.3, n)),
+            "Close": close,
+            "Volume": rng.integers(1_000_000, 4_000_000, n).astype(float),
+        },
+        index=idx,
+    )
 
 
 @pytest.fixture
@@ -54,8 +58,14 @@ def yahoo_mock(monkeypatch):
     """
     import yfinance
 
-    state = {"history_calls": 0, "tickers": [], "kwargs": {}, "frame": None,
-             "error": None, "effects": []}
+    state = {
+        "history_calls": 0,
+        "tickers": [],
+        "kwargs": {},
+        "frame": None,
+        "error": None,
+        "effects": [],
+    }
 
     class FakeTicker:
         def __init__(self, ticker):

@@ -1,4 +1,5 @@
 """Metrics edge cases, train-only-selected, baselines, min-rows guard."""
+
 import numpy as np
 import pytest
 
@@ -49,6 +50,7 @@ def test_directional_accuracy_edges():
 def test_baseline_warning_text_both_branches():
     assert baseline_warning_text("RF", 0.5, 1.0) is None  # winning: silent
     text = baseline_warning_text("RF", 1.5, 1.0)
+    assert text is not None
     assert "does not beat the naive baseline" in text
     assert "1.50%" in text and "1.00%" in text
     assert baseline_warning_text("RF", float("nan"), 1.0) is None
@@ -56,13 +58,21 @@ def test_baseline_warning_text_both_branches():
 
 def test_train_result_shape_and_features(ohlcv):
     res = train_models(ohlcv)
-    assert set(res) == {"feature_cols", "target_col", "models", "test",
-                        "metrics", "baselines", "residuals", "verdict"}
+    assert set(res) == {
+        "feature_cols",
+        "target_col",
+        "models",
+        "test",
+        "metrics",
+        "baselines",
+        "residuals",
+        "verdict",
+    }
     assert res["target_col"] == "Target"
     assert len(res["feature_cols"]) == 15
     assert "Close_Lag_1" not in res["feature_cols"]  # no price-level features
     assert set(res["models"]) == {"Linear Regression", "Random Forest"}
-    for name, m in res["metrics"].items():
+    for m in res["metrics"].values():
         assert set(m) == {"return", "price", "dir_acc", "r2_oos", "folds"}
     assert set(res["baselines"]) == {"zero_return", "always_up_dir_acc"}
 
@@ -73,8 +83,8 @@ def test_train_only_selected_trains_subset(ohlcv):
     assert set(rf_only["models"]) == {"Random Forest"}
     assert set(rf_only["metrics"]) == {"Random Forest"}
     np.testing.assert_allclose(
-        rf_only["test"]["pred_ret"]["Random Forest"],
-        full["test"]["pred_ret"]["Random Forest"])
+        rf_only["test"]["pred_ret"]["Random Forest"], full["test"]["pred_ret"]["Random Forest"]
+    )
     assert set(rf_only["baselines"]) == {"zero_return", "always_up_dir_acc"}
 
 

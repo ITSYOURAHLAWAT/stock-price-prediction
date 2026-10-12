@@ -1,4 +1,5 @@
 """No-leakage tests: row t of the feature frame must not read OHLCV[t]."""
+
 import numpy as np
 
 from src.features import TARGET_COL, create_features, reconstruct_close

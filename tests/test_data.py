@@ -1,11 +1,12 @@
 """Fetch behavior with mocked yfinance (no network)."""
+
 import time
 from datetime import date
 
 import pandas as pd
 import pytest
 
-from src.data import fetch_history, fetch_stock_data, sanitize_ticker
+from src.data import fetch_history, fetch_stock_data
 from src.models import train_models
 
 
@@ -55,6 +56,7 @@ def test_multiindex_columns_flattened(yahoo_mock, ohlcv):
     mi.columns = pd.MultiIndex.from_product([mi.columns, ["AAPL"]])
     yahoo_mock["frame"] = mi
     got = fetch_stock_data("AAPL", date(2024, 1, 1), date(2024, 3, 1))
+    assert got is not None
     assert list(got.columns)[:5] == ["Open", "High", "Low", "Close", "Volume"]
 
 
@@ -96,8 +98,9 @@ def test_rate_limit_message_is_distinct(yahoo_mock, monkeypatch):
     yahoo_mock["error"] = RuntimeError("429 Too Many Requests")
     _no_sleep(monkeypatch)
     msgs = []
-    assert fetch_stock_data("AAPL", date(2024, 1, 1), date(2024, 3, 1),
-                            on_error=msgs.append) is None
+    assert (
+        fetch_stock_data("AAPL", date(2024, 1, 1), date(2024, 3, 1), on_error=msgs.append) is None
+    )
     assert any("rate-limit" in m.lower() for m in msgs)
 
 
@@ -105,8 +108,9 @@ def test_network_message_suggests_upgrade(yahoo_mock, monkeypatch):
     yahoo_mock["error"] = ConnectionError("connection refused")
     _no_sleep(monkeypatch)
     msgs = []
-    assert fetch_stock_data("AAPL", date(2024, 1, 1), date(2024, 3, 1),
-                            on_error=msgs.append) is None
+    assert (
+        fetch_stock_data("AAPL", date(2024, 1, 1), date(2024, 3, 1), on_error=msgs.append) is None
+    )
     assert any("pip install -U yfinance" in m for m in msgs)
 
 

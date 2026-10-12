@@ -2,12 +2,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Shared logic lives in src/ (Phase 1 refactor). This file keeps only CLI code.
-from src.data import fetch_history
-from src.data import sanitize_ticker
-from src.indicators import calculate_technical_indicators as _calculate_indicators
+from src.data import fetch_history, sanitize_ticker
 from src.features import create_features as _create_features
-from src.models import train_models as _train_models, get_feature_columns as _get_feature_columns
 from src.forecast import predict_future_prices as _predict_future
+from src.indicators import calculate_technical_indicators as _calculate_indicators
+from src.models import get_feature_columns as _get_feature_columns
+from src.models import train_models as _train_models
 
 
 class StockPredictor:
@@ -42,11 +42,11 @@ class StockPredictor:
 
         # Shared computation; keep the legacy CLI column set (no Bollinger Bands).
         full = _calculate_indicators(self.data)
-        for col in ('MA_20', 'MA_50', 'RSI'):
+        for col in ("MA_20", "MA_50", "RSI"):
             self.data[col] = full[col]
 
         # Price change percentage (legacy CLI computed this here, not in features)
-        self.data['Price_Change'] = self.data['Close'].pct_change()
+        self.data["Price_Change"] = self.data["Close"].pct_change()
 
         print("✅ Technical indicators calculated")
 
@@ -60,9 +60,20 @@ class StockPredictor:
         # Display/indicator columns (MA_20/MA_50/RSI/Price_Change/...) are for
         # charts only: the return model trains exclusively on the unified
         # scale-free set, so drop them before feature engineering.
-        display_cols = [c for c in ('MA_20', 'MA_50', 'RSI', 'Price_Change',
-                                    'Volume_MA', 'BB_Middle', 'BB_Upper', 'BB_Lower')
-                        if c in data.columns]
+        display_cols = [
+            c
+            for c in (
+                "MA_20",
+                "MA_50",
+                "RSI",
+                "Price_Change",
+                "Volume_MA",
+                "BB_Middle",
+                "BB_Upper",
+                "BB_Lower",
+            )
+            if c in data.columns
+        ]
         clean = data.drop(columns=display_cols)
         return _create_features(clean)
 
@@ -78,39 +89,45 @@ class StockPredictor:
             print(f"❌ {e}")
             return
 
-        test, metrics, baselines = res['test'], res['metrics'], res['baselines']
+        test, metrics, baselines = res["test"], res["metrics"], res["baselines"]
         results = {}
 
         for name, m in metrics.items():
             results[name] = {
-                'model': res['models'][name],  # fitted Pipeline(StandardScaler, regressor)
-                'predictions': np.asarray(test['pred_close'][name]),
-                'mae': m['price']['MAE'],
-                'mse': m['price']['RMSE'] ** 2,
-                'rmse': m['price']['RMSE'],
-                'r2': m['r2_oos'],
-                'test_dates': test['index'],
-                'actual': test['actual_close'],
+                "model": res["models"][name],  # fitted Pipeline(StandardScaler, regressor)
+                "predictions": np.asarray(test["pred_close"][name]),
+                "mae": m["price"]["MAE"],
+                "mse": m["price"]["RMSE"] ** 2,
+                "rmse": m["price"]["RMSE"],
+                "r2": m["r2_oos"],
+                "test_dates": test["index"],
+                "actual": test["actual_close"],
             }
 
-            print(f"✅ {name} trained - OOS R²: {m['r2_oos']:.4f}, "
-                  f"price RMSE: ${m['price']['RMSE']:.2f}, "
-                  f"MAPE: {m['price']['MAPE']:.2f}%, dir: {m['dir_acc'] * 100:.1f}%")
+            print(
+                f"✅ {name} trained - OOS R²: {m['r2_oos']:.4f}, "
+                f"price RMSE: ${m['price']['RMSE']:.2f}, "
+                f"MAPE: {m['price']['MAPE']:.2f}%, dir: {m['dir_acc'] * 100:.1f}%"
+            )
 
-        zb = baselines['zero_return']
-        print(f"📏 Naive baseline (zero return) - price RMSE: ${zb['price']['RMSE']:.2f}, "
-              f"MAPE: {zb['price']['MAPE']:.2f}%, always-up dir: "
-              f"{baselines['always_up_dir_acc'] * 100:.1f}%")
-        for vname, vbeats in res['verdict'].items():
-            print(f"{'✅' if vbeats else '⛔'} {vname} verdict: "
-                  f"{'beats' if vbeats else 'does not beat'} the naive baseline "
-                  f"(pooled R² {metrics[vname]['r2_oos']:.3f})")
+        zb = baselines["zero_return"]
+        print(
+            f"📏 Naive baseline (zero return) - price RMSE: ${zb['price']['RMSE']:.2f}, "
+            f"MAPE: {zb['price']['MAPE']:.2f}%, always-up dir: "
+            f"{baselines['always_up_dir_acc'] * 100:.1f}%"
+        )
+        for vname, vbeats in res["verdict"].items():
+            print(
+                f"{'✅' if vbeats else '⛔'} {vname} verdict: "
+                f"{'beats' if vbeats else 'does not beat'} the naive baseline "
+                f"(pooled R² {metrics[vname]['r2_oos']:.3f})"
+            )
 
         self.models = results
         # Keep the training feature columns (and the fitted pipelines) so
         # predict_future reuses them instead of rebuilding features for names.
-        self.pipelines = res['models']
-        self.feature_cols = res['feature_cols']
+        self.pipelines = res["models"]
+        self.feature_cols = res["feature_cols"]
         return results
 
     def plot_results(self):
@@ -121,42 +138,53 @@ class StockPredictor:
 
         # Create subplots
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle(f'{self.ticker} Stock Analysis', fontsize=16)
+        fig.suptitle(f"{self.ticker} Stock Analysis", fontsize=16)
 
         # Plot 1: Stock price with moving averages
-        axes[0, 0].plot(self.data.index, self.data['Close'], label='Close Price', linewidth=2)
-        axes[0, 0].plot(self.data.index, self.data['MA_20'], label='MA 20', alpha=0.7)
-        axes[0, 0].plot(self.data.index, self.data['MA_50'], label='MA 50', alpha=0.7)
-        axes[0, 0].set_title('Stock Price & Moving Averages')
-        axes[0, 0].set_ylabel('Price ($)')
+        axes[0, 0].plot(self.data.index, self.data["Close"], label="Close Price", linewidth=2)
+        axes[0, 0].plot(self.data.index, self.data["MA_20"], label="MA 20", alpha=0.7)
+        axes[0, 0].plot(self.data.index, self.data["MA_50"], label="MA 50", alpha=0.7)
+        axes[0, 0].set_title("Stock Price & Moving Averages")
+        axes[0, 0].set_ylabel("Price ($)")
         axes[0, 0].legend()
         axes[0, 0].grid(True, alpha=0.3)
 
         # Plot 2: Volume
-        axes[0, 1].bar(self.data.index, self.data['Volume'], alpha=0.6, color='orange')
-        axes[0, 1].set_title('Trading Volume')
-        axes[0, 1].set_ylabel('Volume')
+        axes[0, 1].bar(self.data.index, self.data["Volume"], alpha=0.6, color="orange")
+        axes[0, 1].set_title("Trading Volume")
+        axes[0, 1].set_ylabel("Volume")
         axes[0, 1].grid(True, alpha=0.3)
 
         # Plot 3: RSI
-        axes[1, 0].plot(self.data.index, self.data['RSI'], color='purple')
-        axes[1, 0].axhline(y=70, color='r', linestyle='--', alpha=0.7, label='Overbought (70)')
-        axes[1, 0].axhline(y=30, color='g', linestyle='--', alpha=0.7, label='Oversold (30)')
-        axes[1, 0].set_title('RSI (Relative Strength Index)')
-        axes[1, 0].set_ylabel('RSI')
+        axes[1, 0].plot(self.data.index, self.data["RSI"], color="purple")
+        axes[1, 0].axhline(y=70, color="r", linestyle="--", alpha=0.7, label="Overbought (70)")
+        axes[1, 0].axhline(y=30, color="g", linestyle="--", alpha=0.7, label="Oversold (30)")
+        axes[1, 0].set_title("RSI (Relative Strength Index)")
+        axes[1, 0].set_ylabel("RSI")
         axes[1, 0].legend()
         axes[1, 0].grid(True, alpha=0.3)
 
         # Plot 4: Predictions comparison
-        best_model = min(self.models.keys(), key=lambda x: self.models[x]['rmse'])
+        best_model = min(self.models.keys(), key=lambda x: self.models[x]["rmse"])
         model_data = self.models[best_model]
 
-        axes[1, 1].plot(model_data['test_dates'], model_data['actual'],
-                       label='Actual', linewidth=2, color='blue')
-        axes[1, 1].plot(model_data['test_dates'], model_data['predictions'],
-                       label=f'{best_model} Predicted', linewidth=2, color='red', linestyle='--')
-        axes[1, 1].set_title(f'Actual vs Predicted ({best_model})')
-        axes[1, 1].set_ylabel('Price ($)')
+        axes[1, 1].plot(
+            model_data["test_dates"],
+            model_data["actual"],
+            label="Actual",
+            linewidth=2,
+            color="blue",
+        )
+        axes[1, 1].plot(
+            model_data["test_dates"],
+            model_data["predictions"],
+            label=f"{best_model} Predicted",
+            linewidth=2,
+            color="red",
+            linestyle="--",
+        )
+        axes[1, 1].set_title(f"Actual vs Predicted ({best_model})")
+        axes[1, 1].set_ylabel("Price ($)")
         axes[1, 1].legend()
         axes[1, 1].grid(True, alpha=0.3)
 
@@ -174,7 +202,7 @@ class StockPredictor:
             return
 
         # Use the best performing model (price RMSE on the holdout)
-        best_model_name = min(self.models.keys(), key=lambda x: self.models[x]['rmse'])
+        best_model_name = min(self.models.keys(), key=lambda x: self.models[x]["rmse"])
         best_model = self.pipelines[best_model_name]
 
         print(f"🔮 Predicting next {days} days using {best_model_name}:")
@@ -188,10 +216,13 @@ class StockPredictor:
         else:
             feature_cols = self.feature_cols
 
-        current_price = self.data['Close'].iloc[-1]
+        current_price = self.data["Close"].iloc[-1]
         predictions = _predict_future(
-            best_model, self.data, feature_cols, days,
-        )['close']
+            best_model,
+            self.data,
+            feature_cols,
+            days,
+        )["close"]
 
         for day, pred in enumerate(predictions, start=1):
             change_pct = ((pred - current_price) / current_price) * 100
@@ -205,9 +236,9 @@ class StockPredictor:
             print("❌ Not enough data available.")
             return
 
-        current_price = self.data['Close'].iloc[-1]
-        price_change = self.data['Close'].iloc[-1] - self.data['Close'].iloc[-2]
-        price_change_pct = (price_change / self.data['Close'].iloc[-2]) * 100
+        current_price = self.data["Close"].iloc[-1]
+        price_change = self.data["Close"].iloc[-1] - self.data["Close"].iloc[-2]
+        price_change_pct = (price_change / self.data["Close"].iloc[-2]) * 100
 
         print(f"\n📊 {self.ticker} Summary:")
         print(f"Current Price: ${current_price:.2f}")
@@ -236,7 +267,9 @@ def main():
     else:
         ticker = sanitize_ticker(raw)
         if ticker is None:
-            print("❌ Invalid ticker. Use letters, digits, `.`, `-`, `=` or `^` (max 12 characters).")
+            print(
+                "❌ Invalid ticker. Use letters, digits, `.`, `-`, `=` or `^` (max 12 characters)."
+            )
             return
 
     # Initialize predictor

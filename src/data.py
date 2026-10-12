@@ -10,6 +10,7 @@ is gone too.
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import date, datetime
 
 import pandas as pd
@@ -26,7 +27,7 @@ _RETRY_DELAYS = (1.0, 2.0)
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-=^]{1,12}$")
 
 
-def sanitize_ticker(raw):
+def sanitize_ticker(raw: str | None) -> str | None:
     """Strip/uppercase ``raw``; return it if it's a plausible ticker, else None."""
     clean = (raw or "").strip().upper()
     if not clean or not _TICKER_RE.match(clean):
@@ -42,14 +43,17 @@ def _default_err(msg):
     print(msg)
 
 
-def _is_rate_limit_error(exc):
+def _is_rate_limit_error(exc: BaseException) -> bool:
     """Detect rate limiting by message (yfinance 0.2.51 has no dedicated class)."""
     text = f"{type(exc).__name__}: {exc}".lower()
-    return any(s in text for s in ("rate limit", "rate-limit", "ratelimit",
-                                   "429", "too many requests"))
+    return any(
+        s in text for s in ("rate limit", "rate-limit", "ratelimit", "429", "too many requests")
+    )
 
 
-def _request_history(description, make_call):
+def _request_history(
+    description: str, make_call: Callable[[], pd.DataFrame]
+) -> tuple[pd.DataFrame | None, BaseException | None]:
     """Call ``make_call()`` (returns a DataFrame) with up-to-2 retries.
 
     Returns ``(frame_or_None, last_exc_or_None)``. Both exceptions and empty
@@ -62,8 +66,7 @@ def _request_history(description, make_call):
             frame, last_exc = make_call(), None
         except Exception as exc:  # yfinance/network surface; classified by caller
             frame, last_exc = None, exc
-            logger.warning("%s attempt %d/%d failed: %r",
-                           description, attempt + 1, attempts, exc)
+            logger.warning("%s attempt %d/%d failed: %r", description, attempt + 1, attempts, exc)
         if frame is not None and not frame.empty:
             return frame, None
         if attempt + 1 < attempts:
@@ -71,7 +74,7 @@ def _request_history(description, make_call):
     return frame, last_exc
 
 
-def flatten_columns(data):
+def flatten_columns(data: pd.DataFrame) -> pd.DataFrame:
     """Flatten yfinance MultiIndex columns (``('Close', 'AAPL')`` -> ``'Close'``)."""
     df = data.copy()
     if isinstance(df.columns, pd.MultiIndex):
@@ -79,21 +82,35 @@ def flatten_columns(data):
     return df
 
 
-def _as_timestamp(value, end=False):
+def _as_timestamp(value: date | datetime | str | pd.Timestamp, end: bool = False) -> datetime:
     if isinstance(value, datetime):
         return value
     if isinstance(value, date):
         return datetime.combine(value, datetime.max.time() if end else datetime.min.time())
-    return pd.Timestamp(value)
+    try:
+        stamp = pd.Timestamp(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Unparseable date: {value!r}") from exc
+    if not isinstance(stamp, datetime):  # NaT is not a datetime
+        raise ValueError(f"Unparseable date: {value!r}")
+    return stamp.to_pydatetime()
 
 
-def fetch_stock_data(ticker, start, end, on_error=None):
+def fetch_stock_data(
+    ticker: str | None,
+    start: date | datetime | str | pd.Timestamp,
+    end: date | datetime | str | pd.Timestamp,
+    on_error: Callable[[str], None] | None = None,
+) -> pd.DataFrame | None:
     """Fetch OHLCV history for ``[start, end]``. Returns ``None`` on failure."""
     on_error = on_error or _default_err
 
     clean = sanitize_ticker(ticker)
     if clean is None:
-        on_error("⚠️ Please enter a valid stock ticker (letters, digits, `.`, `-`, `=` or `^`, max 12 characters).")
+        on_error(
+            "⚠️ Please enter a valid stock ticker (letters, digits, `.`, `-`, "
+            "`=` or `^`, max 12 characters)."
+        )
         return None
 
     try:
@@ -107,8 +124,8 @@ def fetch_stock_data(ticker, start, end, on_error=None):
         return None
 
     data, last_exc = _request_history(
-        f"fetch {clean}",
-        lambda: flatten_columns(yf.Ticker(clean).history(start=start, end=end)))
+        f"fetch {clean}", lambda: flatten_columns(yf.Ticker(clean).history(start=start, end=end))
+    )
 
     if data is not None and not data.empty:
         return data
@@ -116,8 +133,10 @@ def fetch_stock_data(ticker, start, end, on_error=None):
     if last_exc is not None:
         logger.exception("fetch for %s failed after retries", clean)
         if _is_rate_limit_error(last_exc):
-            on_error(f"⏳ Yahoo Finance rate-limited the request for '{clean}'. Please wait "
-                     "a minute and try again (fewer tickers / wider-spaced runs also help).")
+            on_error(
+                f"⏳ Yahoo Finance rate-limited the request for '{clean}'. Please wait "
+                "a minute and try again (fewer tickers / wider-spaced runs also help)."
+            )
         else:
             on_error(f"❌ Error fetching data for '{clean}'. Please check:")
             on_error("1. Your internet connection is working")
@@ -133,7 +152,7 @@ def fetch_stock_data(ticker, start, end, on_error=None):
     return None
 
 
-def fetch_history(ticker, period="2y"):
+def fetch_history(ticker: str | None, period: str = "2y") -> pd.DataFrame:
     """Fetch OHLCV history by period (CLI variant). Returns a DataFrame.
 
     Retries like :func:`fetch_stock_data`. Re-raises the last exception so
@@ -143,7 +162,8 @@ def fetch_history(ticker, period="2y"):
     clean = sanitize_ticker(ticker)
     stock = yf.Ticker(clean or "")
     frame, last_exc = _request_history(
-        f"fetch {clean}", lambda: flatten_columns(stock.history(period=period)))
+        f"fetch {clean}", lambda: flatten_columns(stock.history(period=period))
+    )
     if last_exc is not None:
         raise last_exc
-    return frame
+    return frame if frame is not None else pd.DataFrame()
