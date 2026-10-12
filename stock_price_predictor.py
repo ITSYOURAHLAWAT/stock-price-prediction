@@ -24,10 +24,11 @@ class StockPredictor:
         try:
             self.data = fetch_history(self.ticker, period=self.period)
         except Exception as e:
-            print(f"❌ Error fetching data: {e}")
+            print(f"❌ Network/API error fetching data: {e}")
+            print("   Check your connection; if EVERY ticker fails, try: pip install -U yfinance")
             return False
         if self.data is None or self.data.empty:
-            print(f"❌ No data found for ticker '{self.ticker}'. Please check the ticker symbol and your connection.")
+            print(f"❌ No data found for ticker '{self.ticker}'. Please check the ticker symbol.")
             self.data = None
             return False
         print(f"✅ Successfully fetched {len(self.data)} days of data for {self.ticker}")
@@ -63,7 +64,7 @@ class StockPredictor:
                                     'Volume_MA', 'BB_Middle', 'BB_Upper', 'BB_Lower')
                         if c in data.columns]
         clean = data.drop(columns=display_cols)
-        return _create_features(clean, include_close_std=False)
+        return _create_features(clean)
 
     def train_models(self):
         """Train return models (plus baselines) and keep plot/forecast state."""
@@ -72,7 +73,7 @@ class StockPredictor:
             return
 
         try:
-            res = _train_models(self.data, include_close_std=False)
+            res = _train_models(self.data)
         except ValueError as e:
             print(f"❌ {e}")
             return

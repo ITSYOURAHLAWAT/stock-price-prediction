@@ -9,12 +9,16 @@ is gone too.
 
 import logging
 import re
+import time
 from datetime import date, datetime
 
 import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+# Retry policy: initial attempt + 2 retries with short stdlib-only backoff.
+_RETRY_DELAYS = (1.0, 2.0)
 
 # Yahoo tickers: letters, digits, '.', '-', '=' (e.g. EURUSD=X, GC=F) and
 # '^' (indices, e.g. ^GSPC), max 12 chars. Anything else is rejected before
@@ -36,6 +40,35 @@ def _default_warn(msg):
 
 def _default_err(msg):
     print(msg)
+
+
+def _is_rate_limit_error(exc):
+    """Detect rate limiting by message (yfinance 0.2.51 has no dedicated class)."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(s in text for s in ("rate limit", "rate-limit", "ratelimit",
+                                   "429", "too many requests"))
+
+
+def _request_history(description, make_call):
+    """Call ``make_call()`` (returns a DataFrame) with up-to-2 retries.
+
+    Returns ``(frame_or_None, last_exc_or_None)``. Both exceptions and empty
+    frames are retried: Yahoo flakes on both. Callers classify the outcome.
+    """
+    attempts = 1 + len(_RETRY_DELAYS)
+    frame, last_exc = None, None
+    for attempt in range(attempts):
+        try:
+            frame, last_exc = make_call(), None
+        except Exception as exc:  # yfinance/network surface; classified by caller
+            frame, last_exc = None, exc
+            logger.warning("%s attempt %d/%d failed: %r",
+                           description, attempt + 1, attempts, exc)
+        if frame is not None and not frame.empty:
+            return frame, None
+        if attempt + 1 < attempts:
+            time.sleep(_RETRY_DELAYS[attempt])
+    return frame, last_exc
 
 
 def flatten_columns(data):
@@ -73,33 +106,44 @@ def fetch_stock_data(ticker, start, end, on_error=None):
         on_error("⚠️ Start date must be before end date.")
         return None
 
-    try:
-        data = yf.Ticker(clean).history(start=start, end=end)
-    except Exception:
-        logger.exception("yfinance fetch failed for %s", clean)
-        on_error(f"❌ Error fetching data for '{clean}'. Please check:")
-        on_error("1. The ticker symbol is correct (e.g., AAPL, GOOGL, MSFT)")
-        on_error("2. Your internet connection is working")
-        on_error("3. Yahoo Finance API is accessible")
+    data, last_exc = _request_history(
+        f"fetch {clean}",
+        lambda: flatten_columns(yf.Ticker(clean).history(start=start, end=end)))
+
+    if data is not None and not data.empty:
+        return data
+
+    if last_exc is not None:
+        logger.exception("fetch for %s failed after retries", clean)
+        if _is_rate_limit_error(last_exc):
+            on_error(f"⏳ Yahoo Finance rate-limited the request for '{clean}'. Please wait "
+                     "a minute and try again (fewer tickers / wider-spaced runs also help).")
+        else:
+            on_error(f"❌ Error fetching data for '{clean}'. Please check:")
+            on_error("1. Your internet connection is working")
+            on_error("2. Yahoo Finance API is accessible (it may be temporarily down)")
+            on_error("3. If EVERY ticker fails, try upgrading yfinance: pip install -U yfinance")
         return None
 
-    data = flatten_columns(data)
-    if data.empty:
-        on_error(f"❌ No data found for ticker '{clean}' in the selected range. Please check:")
-        on_error("1. The ticker symbol is correct (e.g., AAPL, GOOGL, MSFT)")
-        on_error("2. The date range contains trading days")
-        on_error("3. Yahoo Finance API is accessible")
-        return None
-
-    return data
+    logger.warning("no data for %s in range after retries", clean)
+    on_error(f"❌ No data found for ticker '{clean}' in the selected range. Please check:")
+    on_error("1. The ticker symbol is correct (e.g., AAPL, GOOGL, MSFT)")
+    on_error("2. The date range contains trading days")
+    on_error("3. Yahoo Finance API is accessible")
+    return None
 
 
 def fetch_history(ticker, period="2y"):
     """Fetch OHLCV history by period (CLI variant). Returns a DataFrame.
 
-    Raises whatever ``yfinance`` raises; the CLI wrapper keeps its
-    try/except + print behaviour so output is unchanged.
+    Retries like :func:`fetch_stock_data`. Re-raises the last exception so
+    the CLI wrapper can print the network-style message; an empty frame is
+    returned as-is so it prints the no-data message instead.
     """
     clean = sanitize_ticker(ticker)
     stock = yf.Ticker(clean or "")
-    return flatten_columns(stock.history(period=period))
+    frame, last_exc = _request_history(
+        f"fetch {clean}", lambda: flatten_columns(stock.history(period=period)))
+    if last_exc is not None:
+        raise last_exc
+    return frame

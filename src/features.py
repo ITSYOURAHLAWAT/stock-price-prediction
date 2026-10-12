@@ -37,12 +37,8 @@ def reconstruct_close(prev_close, pred_return):
     return prev_close * np.exp(pred_return)
 
 
-def create_features(data, include_close_std=True):
-    """Create leakage-free, scale-free features + log-return target.
-
-    ``include_close_std`` is accepted for backward compatibility and ignored:
-    there is a single unified feature set (return-space stds are always in).
-    """
+def create_features(data):
+    """Create leakage-free, scale-free features + log-return target."""
     df = data.copy()
     close = df['Close']
     volume = df['Volume']

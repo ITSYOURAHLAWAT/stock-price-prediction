@@ -54,7 +54,8 @@ def yahoo_mock(monkeypatch):
     """
     import yfinance
 
-    state = {"history_calls": 0, "tickers": [], "kwargs": {}, "frame": None, "error": None}
+    state = {"history_calls": 0, "tickers": [], "kwargs": {}, "frame": None,
+             "error": None, "effects": []}
 
     class FakeTicker:
         def __init__(self, ticker):
@@ -63,6 +64,11 @@ def yahoo_mock(monkeypatch):
         def history(self, **kwargs):
             state["history_calls"] += 1
             state["kwargs"] = kwargs
+            if state["effects"]:
+                eff = state["effects"].pop(0)
+                if isinstance(eff, Exception):
+                    raise eff
+                return eff
             if state["error"] is not None:
                 raise state["error"]
             return state["frame"].copy()

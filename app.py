@@ -85,7 +85,7 @@ def _cached_train(clean_ticker, start, end, model_type, data):
     """Training cache. Key = (ticker, start, end, model, data): any change
     (including fresh history) recomputes; identical reruns reuse models."""
     only = None if model_type == "Both (Comparison)" else model_type
-    return train_models(data, include_close_std=True, only=only)
+    return train_models(data, only=only)
 
 # Main app logic
 # Show instructions if no analysis has been run

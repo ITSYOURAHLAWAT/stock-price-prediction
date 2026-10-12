@@ -145,11 +145,10 @@ def _fit_pipelines(X_train, y_train, wanted):
     return fitted
 
 
-def train_models(data, include_close_std=True, only=None):
+def train_models(data, only=None):
     """Train return models with walk-forward validation.
 
-    ``include_close_std`` is accepted for backward compatibility and ignored
-    (single unified scale-free feature set). ``only`` selects
+    ``only`` selects
     ``"Random Forest"``, ``"Linear Regression"``, ``"Both (Comparison)"`` or
     ``None`` (both). Baselines are always computed. No hyperparameter search
     is performed anywhere: estimator settings are fixed in ``MODEL_SPECS``.
@@ -176,7 +175,7 @@ def train_models(data, include_close_std=True, only=None):
 
     Raises ``ValueError`` on too few rows or an unknown ``only`` value.
     """
-    featured = create_features(data, include_close_std=include_close_std)
+    featured = create_features(data)
 
     if len(featured) < MIN_ROWS_AFTER_FEATURES:
         raise ValueError(
